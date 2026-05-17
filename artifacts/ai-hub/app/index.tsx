@@ -138,6 +138,7 @@ export default function HomeScreen() {
     });
   }
 
+
   function toggleCompareModel(m: AIModel) {
     setCompareModels((prev) => {
       const exists = prev.find((p) => p.id === m.id);
@@ -611,6 +612,9 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
     fontSize: 15,
     paddingVertical: 6,
+  },
+  inputPlaceholder: {
+    paddingVertical: 8,
   },
   sendBtn: {
     width: 36,

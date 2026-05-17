@@ -6,6 +6,7 @@ import {
   Animated,
   Pressable,
   Modal,
+  ScrollView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
@@ -42,7 +43,13 @@ function MessageBubbleImpl({
   const showDots = streaming && content.length === 0;
   const [vote, setVote] = useState<Vote>(null);
   const [menuVisible, setMenuVisible] = useState(false);
-  const [selectable, setSelectable] = useState(false);
+  // Dedicated bottom-sheet for "Select Text". Earlier this just toggled
+  // selectable={true} on the message Text — Android then treated the
+  // long-press as an input focus and popped the soft keyboard, which
+  // is the bug the user kept hitting. Now we open a sheet with the
+  // message rendered as a selectable Text in its own scroll view, no
+  // input field on screen → no keyboard.
+  const [selectSheetVisible, setSelectSheetVisible] = useState(false);
 
   const handleCopy = async () => {
     await Clipboard.setStringAsync(content);
@@ -51,8 +58,8 @@ function MessageBubbleImpl({
   };
 
   const handleSelect = () => {
-    setSelectable(true);
     setMenuVisible(false);
+    setSelectSheetVisible(true);
   };
 
   const handleVote = (next: Vote) => {
@@ -100,7 +107,6 @@ function MessageBubbleImpl({
           ) : (
             <View>
               <Text
-                selectable={selectable}
                 style={[
                   styles.text,
                   {
@@ -208,6 +214,84 @@ function MessageBubbleImpl({
               </>
             )}
           </View>
+        </Pressable>
+      </Modal>
+
+      {/* Select-text sheet — opened from the action menu. No TextInput
+          on screen → Android won't open the keyboard. The message is
+          rendered as a scrollable, selectable Text so the user can
+          highlight any portion with the native text-selection handles. */}
+      <Modal
+        transparent
+        visible={selectSheetVisible}
+        animationType="slide"
+        onRequestClose={() => setSelectSheetVisible(false)}
+      >
+        <Pressable
+          style={styles.selectSheetOverlay}
+          onPress={() => setSelectSheetVisible(false)}
+        >
+          <Pressable
+            style={[
+              styles.selectSheet,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+            onPress={() => {}}
+          >
+            <View style={styles.selectGrabber} />
+            <View style={styles.selectHeader}>
+              <Text
+                style={[styles.selectTitle, { color: colors.foreground }]}
+              >
+                Select Text
+              </Text>
+              <Pressable
+                hitSlop={8}
+                onPress={() => setSelectSheetVisible(false)}
+              >
+                <Ionicons
+                  name="close"
+                  size={22}
+                  color={colors.mutedForeground}
+                />
+              </Pressable>
+            </View>
+            <ScrollView
+              style={styles.selectScroll}
+              contentContainerStyle={styles.selectScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <Text
+                selectable
+                style={[styles.selectBody, { color: colors.foreground }]}
+              >
+                {content}
+              </Text>
+            </ScrollView>
+            <View style={styles.selectActions}>
+              <Pressable
+                style={[
+                  styles.selectActionBtn,
+                  { backgroundColor: colors.primary },
+                ]}
+                onPress={handleCopy}
+              >
+                <Ionicons
+                  name="copy-outline"
+                  size={16}
+                  color={colors.primaryForeground}
+                />
+                <Text
+                  style={[
+                    styles.selectActionText,
+                    { color: colors.primaryForeground },
+                  ]}
+                >
+                  Copy all
+                </Text>
+              </Pressable>
+            </View>
+          </Pressable>
         </Pressable>
       </Modal>
     </View>
@@ -429,6 +513,67 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginLeft: 1,
     borderRadius: 2,
+  },
+  selectSheetOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "flex-end",
+  },
+  selectSheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 24,
+    maxHeight: "75%",
+    gap: 8,
+  },
+  selectGrabber: {
+    alignSelf: "center",
+    width: 38,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    marginBottom: 4,
+  },
+  selectHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  selectTitle: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 16,
+  },
+  selectScroll: {
+    maxHeight: 360,
+  },
+  selectScrollContent: {
+    paddingVertical: 12,
+  },
+  selectBody: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  selectActions: {
+    flexDirection: "row",
+    gap: 10,
+    paddingTop: 4,
+  },
+  selectActionBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 14,
+  },
+  selectActionText: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 14,
   },
   menuOverlay: {
     flex: 1,

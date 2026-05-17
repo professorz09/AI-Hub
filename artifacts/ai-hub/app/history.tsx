@@ -547,26 +547,32 @@ const styles = StyleSheet.create({
     // title stays optically centred without the settings icon.
     width: 26,
   },
+  // Earlier maxHeight: 52 was tight enough that the chip border was
+  // getting clipped at the top/bottom on devices where the system
+  // font scaled the chip text up a touch. Removing the cap and
+  // letting the ScrollView size to its content fixes it without
+  // changing the visible padding.
   filters: {
-    maxHeight: 52,
+    flexGrow: 0,
   },
   filtersContent: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingVertical: 10,
     gap: 8,
     alignItems: "center",
   },
   chip: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 20,
     borderWidth: 1,
   },
   chipText: {
     fontFamily: "Inter_500Medium",
     fontSize: 13,
+    lineHeight: 16,
   },
   loadingCenter: { flex: 1, alignItems: "center", justifyContent: "center" },
   emptyCenter: {

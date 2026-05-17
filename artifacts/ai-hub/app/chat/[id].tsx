@@ -119,7 +119,11 @@ export default function ChatScreen() {
       hide.remove();
     };
   }, []);
-  const bottomInset = keyboardOpen ? 0 : bottomInsetRaw;
+  // Tight against the keyboard looks crushed — ChatGPT keeps a small
+  // breathing strip even when the soft keyboard is up. 10 px is the
+  // sweet spot: enough air above the pill, but not so much that the
+  // earlier "empty band" complaint comes back.
+  const bottomInset = keyboardOpen ? 10 : bottomInsetRaw;
 
   const anyStreaming = isStreaming || columns.some((c) => c.streaming);
 
@@ -668,32 +672,58 @@ export default function ChatScreen() {
             ))}
           </View>
         ) : (
-          <Pressable
-            style={styles.modelBtn}
-            onPress={() => setPickerVisible(true)}
-            hitSlop={4}
-          >
-            <ModelAvatar model={model} size={28} />
-            <Text style={[styles.modelName, { color: colors.foreground }]}>
-              {model.name}{" "}
+          <View style={styles.modelBtnWrap}>
+            <Pressable
+              style={[
+                styles.modelPill,
+                {
+                  backgroundColor: "transparent",
+                  borderColor: colors.border,
+                },
+              ]}
+              onPress={() => setPickerVisible(true)}
+              hitSlop={6}
+            >
+              <ModelAvatar model={model} size={20} />
               <Text
-                style={{
-                  color: colors.mutedForeground,
-                  fontFamily: "Inter_400Regular",
-                }}
+                style={[styles.modelPillText, { color: colors.foreground }]}
+                numberOfLines={1}
               >
-                {model.version}
+                {model.name}{" "}
+                <Text
+                  style={{
+                    color: colors.mutedForeground,
+                    fontFamily: "Inter_400Regular",
+                  }}
+                >
+                  {model.version}
+                </Text>
               </Text>
-            </Text>
-            <Ionicons
-              name="chevron-down"
-              size={14}
-              color={colors.mutedForeground}
-            />
-          </Pressable>
+              <Ionicons
+                name="chevron-down"
+                size={12}
+                color={colors.mutedForeground}
+              />
+            </Pressable>
+          </View>
         )}
 
-        <Pressable onPress={() => router.push("/")} hitSlop={8}>
+        <Pressable
+          onPress={() => router.push("/")}
+          hitSlop={8}
+          style={styles.headerIconBtn}
+        >
+          <Ionicons
+            name="create-outline"
+            size={22}
+            color={colors.foreground}
+          />
+        </Pressable>
+        <Pressable
+          onPress={() => router.push("/")}
+          hitSlop={8}
+          style={styles.headerIconBtn}
+        >
           <Ionicons name="home-outline" size={22} color={colors.mutedForeground} />
         </Pressable>
       </View>
@@ -886,6 +916,35 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
+  },
+  headerIconBtn: {
+    padding: 2,
+  },
+  // Centered slot in the header — the pill itself sizes to its
+  // content; this wrapper just claims the empty space between the
+  // menu icon and the home icon so the pill lands in the middle.
+  modelBtnWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // Tight pill, no fill — a hairline border keeps it readable on
+  // pure black without the "white glow" the secondary-grey fill
+  // produced. ChatGPT mobile uses the same near-invisible chip.
+  modelPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxWidth: "100%",
+  },
+  modelPillText: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 14,
+    flexShrink: 1,
   },
   modelName: {
     fontFamily: "Inter_600SemiBold",
