@@ -1,0 +1,27 @@
+kind = "mobile"
+previewPath = "/"
+title = "AI Hub"
+version = "1.0.0"
+id = "artifacts/ai-hub"
+router = "expo-domain"
+
+[[integratedSkills]]
+name = "expo"
+version = "1.0.0"
+
+[[services]]
+ensurePreviewReachable = "/status"
+name = "expo"
+paths = [ "/" ]
+localPort = 26213
+
+[services.development]
+run = "pnpm --filter @workspace/ai-hub run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/ai-hub", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/ai-hub", "run", "serve" ]
+
+[services.env]
+PORT = "26213"
+BASE_PATH = "/"
