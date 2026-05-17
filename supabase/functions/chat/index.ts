@@ -26,12 +26,12 @@ const CORS_HEADERS = {
 // expensive models (Opus / GPT-5 / etc.) by hand-crafting the request.
 // Keep this in sync with AI_MODELS when new models are added there.
 const ALLOWED_MODELS = new Set<string>([
+  "meta-llama/llama-3.3-70b-instruct:free",
   "anthropic/claude-3.5-sonnet",
   "deepseek/deepseek-chat",
   "openai/gpt-4o-mini",
   "qwen/qwen-2.5-72b-instruct",
   "google/gemini-2.0-flash-exp:free",
-  "meta-llama/llama-3.3-70b-instruct",
 ]);
 
 // How many of the most recent messages to feed back to the model as

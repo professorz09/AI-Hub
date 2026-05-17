@@ -33,11 +33,12 @@ import { supabase } from "@/lib/supabase";
 const YOUTUBE_URL_RE =
   /^https:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})(?:[?&#].*)?$/;
 
-// Hardcoded YouTube-summary model. The video summary task benefits from
-// Gemini's longer context + cheaper price, and pinning it here means
-// the YouTube quick action always runs against the same model (even if
-// the user has a different one selected on the home picker).
-const YOUTUBE_MODEL_ID = "google/gemini-2.0-flash-exp:free";
+// Hardcoded YouTube-summary model. Pinning it here means the YouTube
+// quick action always runs against the same model regardless of the
+// home picker. Using Llama 3.3 70B free — the OpenRouter account in
+// use today doesn't have credits for Gemini, and Llama's 128k context
+// + free tier comfortably handles a typical YouTube transcript.
+const YOUTUBE_MODEL_ID = "meta-llama/llama-3.3-70b-instruct:free";
 
 export default function HomeScreen() {
   const colors = useColors();

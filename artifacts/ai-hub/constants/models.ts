@@ -10,7 +10,24 @@ export interface AIModel {
   section: "recent" | "more";
 }
 
+// Llama 3.3 70B (free tier) is the default because it's the model the
+// user's OpenRouter account currently has access to. The rest stay in
+// the list so the picker still shows the broader catalog, but they
+// require paid OpenRouter credits to actually answer — switch them
+// to ":free" variants in the catalog once those become reliably
+// available, or after the user adds credit.
 export const AI_MODELS: AIModel[] = [
+  {
+    id: "meta-llama/llama-3.3-70b-instruct:free",
+    name: "Llama",
+    version: "3.3 70B (Free)",
+    description: "Open-source powerhouse for complex tasks. Free tier.",
+    color: "#0D47A1",
+    textColor: "#FFFFFF",
+    logoUrl: "https://www.google.com/s2/favicons?domain=llama.meta.com&sz=128",
+    badge: "think+hot",
+    section: "recent",
+  },
   {
     id: "anthropic/claude-3.5-sonnet",
     name: "Claude",
@@ -64,17 +81,6 @@ export const AI_MODELS: AIModel[] = [
     textColor: "#FFFFFF",
     logoUrl: "https://www.google.com/s2/favicons?domain=gemini.google.com&sz=128",
     badge: null,
-    section: "more",
-  },
-  {
-    id: "meta-llama/llama-3.3-70b-instruct",
-    name: "Llama",
-    version: "3.3 70B",
-    description: "Open-source powerhouse for complex tasks.",
-    color: "#0D47A1",
-    textColor: "#FFFFFF",
-    logoUrl: "https://www.google.com/s2/favicons?domain=llama.meta.com&sz=128",
-    badge: "think+hot",
     section: "more",
   },
 ];
