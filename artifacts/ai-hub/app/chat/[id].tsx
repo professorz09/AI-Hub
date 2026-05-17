@@ -81,6 +81,10 @@ export default function ChatScreen() {
   const [pickerVisible, setPickerVisible] = useState(false);
   const [attachVisible, setAttachVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  // Web-search toggle. Visual state lives here; the actual search
+  // routing will be wired in when the backend gets a web-search tool.
+  // ChatGPT uses the same pattern — a globe pill in the input row.
+  const [webSearchOn, setWebSearchOn] = useState(false);
   const inputRef = useRef<TextInput>(null);
   const hasSentInitial = useRef(false);
   // Ref-mirror of "is any stream in flight" used to guard against the
@@ -806,6 +810,42 @@ export default function ChatScreen() {
                 color={colors.mutedForeground}
               />
             </Pressable>
+            <Pressable
+              hitSlop={6}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setWebSearchOn((v) => !v);
+              }}
+              style={[
+                styles.searchToggle,
+                {
+                  backgroundColor: webSearchOn ? colors.primary : "transparent",
+                  borderColor: webSearchOn ? colors.primary : colors.border,
+                },
+              ]}
+            >
+              <Ionicons
+                name="globe-outline"
+                size={14}
+                color={
+                  webSearchOn
+                    ? colors.primaryForeground
+                    : colors.mutedForeground
+                }
+              />
+              <Text
+                style={[
+                  styles.searchToggleText,
+                  {
+                    color: webSearchOn
+                      ? colors.primaryForeground
+                      : colors.mutedForeground,
+                  },
+                ]}
+              >
+                Search
+              </Text>
+            </Pressable>
             <TextInput
               ref={inputRef}
               style={[styles.textInput, { color: colors.foreground }]}
@@ -919,6 +959,19 @@ const styles = StyleSheet.create({
   },
   headerIconBtn: {
     padding: 2,
+  },
+  searchToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  searchToggleText: {
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
   },
   // Centered slot in the header — the pill itself sizes to its
   // content; this wrapper just claims the empty space between the

@@ -198,17 +198,17 @@ export default function HistoryScreen() {
               {cat === "Chat" && (
                 <Ionicons
                   name="chatbubbles-outline"
-                  size={14}
+                  size={16}
                   color={iconTint}
-                  style={{ marginRight: 4 }}
+                  style={{ marginRight: 6 }}
                 />
               )}
               {cat === "YouTube" && (
                 <Ionicons
                   name="logo-youtube"
-                  size={14}
+                  size={16}
                   color={iconTint}
-                  style={{ marginRight: 4 }}
+                  style={{ marginRight: 6 }}
                 />
               )}
               <Text
@@ -557,22 +557,24 @@ const styles = StyleSheet.create({
   },
   filtersContent: {
     paddingHorizontal: 16,
-    paddingVertical: 10,
-    gap: 8,
+    paddingVertical: 14,
+    gap: 10,
     alignItems: "center",
   },
   chip: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 24,
     borderWidth: 1,
+    minHeight: 38,
   },
   chipText: {
     fontFamily: "Inter_500Medium",
-    fontSize: 13,
-    lineHeight: 16,
+    fontSize: 14,
+    lineHeight: 18,
+    includeFontPadding: false,
   },
   loadingCenter: { flex: 1, alignItems: "center", justifyContent: "center" },
   emptyCenter: {
