@@ -15,7 +15,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
-SystemUI.setBackgroundColorAsync("#0C0C0E");
+SystemUI.setBackgroundColorAsync("#000000");
 
 SplashScreen.preventAutoHideAsync();
 
@@ -26,7 +26,7 @@ function RootLayoutNav() {
     <Stack
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: "#0C0C0E" },
+        contentStyle: { backgroundColor: "#000000" },
         animation: "slide_from_right",
       }}
     >

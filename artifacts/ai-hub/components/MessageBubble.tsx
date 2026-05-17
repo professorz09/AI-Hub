@@ -88,11 +88,10 @@ function MessageBubbleImpl({
           onLongPress={onLongPress}
           delayLongPress={350}
           style={[
-            styles.bubble,
-            {
-              backgroundColor: isUser ? colors.primary : colors.card,
-              borderBottomRightRadius: isUser ? 4 : 18,
-              borderBottomLeftRadius: isUser ? 18 : 4,
+            isUser ? styles.userBubble : styles.assistantBubble,
+            isUser && {
+              backgroundColor: colors.primary,
+              borderBottomRightRadius: 4,
             },
           ]}
         >
@@ -331,10 +330,10 @@ function TypingDots({ color }: { color: string }) {
 
 const styles = StyleSheet.create({
   row: {
-    marginVertical: 3,
-    paddingHorizontal: 14,
+    marginVertical: 6,
+    paddingHorizontal: 8,
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "flex-start",
   },
   rowLeft: {
     justifyContent: "flex-start",
@@ -344,16 +343,22 @@ const styles = StyleSheet.create({
   },
   avatarSlot: {
     marginRight: 8,
-    marginBottom: 2,
+    marginTop: 2,
   },
   userCol: {
-    maxWidth: "80%",
+    maxWidth: "82%",
   },
   assistantCol: {
     flex: 1,
-    maxWidth: "82%",
   },
-  bubble: {
+  // Assistant: no bubble background, just text on the page so the
+  // line wraps to the full visible width like ChatGPT mobile. Inline
+  // padding only — no rounded card, no surface tint.
+  assistantBubble: {
+    paddingVertical: 4,
+    paddingRight: 4,
+  },
+  userBubble: {
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 18,
