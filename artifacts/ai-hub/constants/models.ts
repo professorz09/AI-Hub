@@ -10,18 +10,30 @@ export interface AIModel {
   section: "recent" | "more";
 }
 
-// Llama 3.3 70B (free tier) is the default because it's the model the
-// user's OpenRouter account currently has access to. The rest stay in
-// the list so the picker still shows the broader catalog, but they
-// require paid OpenRouter credits to actually answer — switch them
-// to ":free" variants in the catalog once those become reliably
-// available, or after the user adds credit.
+// GLM 4.5 Air (free, served by Z.AI) is the default because the
+// OpenRouter Venice free-tier provider that serves Llama/Qwen is
+// saturated almost continuously — every call hits a 429 retry-after.
+// GLM via Z.AI returns reliably. Llama stays in the list as a second
+// option; when Venice is clear it works fine. Switch the default
+// back to Llama (or whichever) once the account has OpenRouter
+// credits or the free pool eases up.
 export const AI_MODELS: AIModel[] = [
+  {
+    id: "z-ai/glm-4.5-air:free",
+    name: "GLM",
+    version: "4.5 Air (Free)",
+    description: "Fast Chinese open-source model. Reliable free tier.",
+    color: "#2D5BE3",
+    textColor: "#FFFFFF",
+    logoUrl: "https://www.google.com/s2/favicons?domain=z.ai&sz=128",
+    badge: "hot",
+    section: "recent",
+  },
   {
     id: "meta-llama/llama-3.3-70b-instruct:free",
     name: "Llama",
     version: "3.3 70B (Free)",
-    description: "Open-source powerhouse for complex tasks. Free tier.",
+    description: "Open-source powerhouse. Free tier (often rate-limited).",
     color: "#0D47A1",
     textColor: "#FFFFFF",
     logoUrl: "https://www.google.com/s2/favicons?domain=llama.meta.com&sz=128",

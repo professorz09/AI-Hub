@@ -35,10 +35,9 @@ const YOUTUBE_URL_RE =
 
 // Hardcoded YouTube-summary model. Pinning it here means the YouTube
 // quick action always runs against the same model regardless of the
-// home picker. Using Llama 3.3 70B free — the OpenRouter account in
-// use today doesn't have credits for Gemini, and Llama's 128k context
-// + free tier comfortably handles a typical YouTube transcript.
-const YOUTUBE_MODEL_ID = "meta-llama/llama-3.3-70b-instruct:free";
+// home picker. Using GLM 4.5 Air (Z.AI) — free tier, reliable
+// availability (the Llama free route is constantly rate-limited).
+const YOUTUBE_MODEL_ID = "z-ai/glm-4.5-air:free";
 
 export default function HomeScreen() {
   const colors = useColors();

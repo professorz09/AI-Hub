@@ -26,6 +26,7 @@ const CORS_HEADERS = {
 // expensive models (Opus / GPT-5 / etc.) by hand-crafting the request.
 // Keep this in sync with AI_MODELS when new models are added there.
 const ALLOWED_MODELS = new Set<string>([
+  "z-ai/glm-4.5-air:free",
   "meta-llama/llama-3.3-70b-instruct:free",
   "anthropic/claude-3.5-sonnet",
   "deepseek/deepseek-chat",
