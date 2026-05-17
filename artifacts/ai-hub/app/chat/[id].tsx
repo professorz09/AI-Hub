@@ -199,7 +199,23 @@ export default function ChatScreen() {
         }),
         signal: args.signal,
       });
-      if (!resp.ok || !resp.body) throw new Error("Stream failed");
+      if (!resp.ok || !resp.body) {
+        // Surface the actual reason from the edge function (e.g.
+        // "No endpoints found", "Unsupported model") instead of the
+        // useless "Stream failed". Most common case: an old chat
+        // pinned to a model the OpenRouter account no longer has —
+        // hint to swap models from the header.
+        let detail = "Stream failed";
+        try {
+          const errBody = await resp.json();
+          if (errBody?.error) detail = String(errBody.error);
+        } catch { /* ignore */ }
+        const friendly =
+          /no endpoints|not found|unsupported|credits|insufficient/i.test(detail)
+            ? `${args.modelId.split("/")[1] ?? "This model"} isn't available right now. Tap the model name at the top to switch.`
+            : detail;
+        throw new Error(friendly);
+      }
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -438,6 +454,34 @@ export default function ChatScreen() {
     inputRef.current?.focus();
   }
 
+  /** Find the user message that prompted this assistant turn and
+   *  re-send it. Strips any post-target turns off the visible list
+   *  too so the new stream replaces (visually) the failed reply.
+   *  Compare mode replays for all columns. */
+  function retryAt(assistantId: string) {
+    if (anyStreaming) return;
+    if (mode === "compare") {
+      const col = columns.find((c) =>
+        c.messages.some((m) => m.id === assistantId),
+      );
+      const idx = col?.messages.findIndex((m) => m.id === assistantId) ?? -1;
+      if (!col || idx < 0) return;
+      const prevUser = [...col.messages.slice(0, idx)]
+        .reverse()
+        .find((m) => m.role === "user");
+      if (!prevUser) return;
+      sendMessage(prevUser.content);
+      return;
+    }
+    const idx = messages.findIndex((m) => m.id === assistantId);
+    if (idx < 0) return;
+    const prevUser = [...messages.slice(0, idx)]
+      .reverse()
+      .find((m) => m.role === "user");
+    if (!prevUser) return;
+    sendMessage(prevUser.content);
+  }
+
   function renderTranscript(list: Message[]) {
     if (list.length === 0) return null;
     return (
@@ -451,11 +495,14 @@ export default function ChatScreen() {
             content={item.content}
             streaming={!!item.streaming}
             modelId={item.model ?? (item.role === "assistant" ? model.id : undefined)}
+            onRetry={item.role === "assistant" ? () => retryAt(item.id) : undefined}
           />
         )}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.listContent}
+        removeClippedSubviews
+        windowSize={11}
       />
     );
   }

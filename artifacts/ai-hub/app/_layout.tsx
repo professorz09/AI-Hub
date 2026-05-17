@@ -32,7 +32,7 @@ function RootLayoutNav() {
     >
       <Stack.Screen name="index" />
       <Stack.Screen name="chat/[id]" options={{ animation: "fade_from_bottom" }} />
-      <Stack.Screen name="history" options={{ animation: "slide_from_right" }} />
+      <Stack.Screen name="history" options={{ animation: "slide_from_left" }} />
     </Stack>
   );
 }
