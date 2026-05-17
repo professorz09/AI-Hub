@@ -23,6 +23,7 @@ import {
   QuickAction,
   QUICK_ACTIONS,
 } from "@/constants/models";
+import { supabase } from "@/lib/supabase";
 
 const YOUTUBE_URL_RE =
   /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/|live\/)|youtu\.be\/)[\w-]{6,}/i;
@@ -46,23 +47,21 @@ export default function HomeScreen() {
     category: string;
   }) {
     try {
-      const baseUrl = `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
-      const resp = await fetch(`${baseUrl}/api/openrouter/conversations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const { data, error } = await supabase
+        .from("conversations")
+        .insert({
           title: args.title.slice(0, 60),
           model: selectedModel.id,
           category: args.category,
-        }),
-      });
-      if (!resp.ok) throw new Error("Failed to create conversation");
-      const conv = await resp.json();
+        })
+        .select("id")
+        .single();
+      if (error || !data) throw error ?? new Error("Failed to create conversation");
       setInputText("");
       router.push({
         pathname: "/chat/[id]",
         params: {
-          id: String(conv.id),
+          id: String(data.id),
           initialMessage: args.initialMessage,
           modelId: selectedModel.id,
           systemPrompt: args.systemPrompt,

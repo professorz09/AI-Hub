@@ -21,6 +21,7 @@ import { ModelAvatar } from "@/components/ModelAvatar";
 import { ModelPicker } from "@/components/ModelPicker";
 import { MessageBubble } from "@/components/MessageBubble";
 import { getModelById, AIModel } from "@/constants/models";
+import { supabase, chatFunctionUrl, SUPABASE_ANON_KEY } from "@/lib/supabase";
 
 interface Message {
   id: string;
@@ -55,29 +56,28 @@ export default function ChatScreen() {
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const baseUrl = `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
-
   const loadMessages = useCallback(async () => {
     try {
-      const resp = await fetch(
-        `${baseUrl}/api/openrouter/conversations/${conversationId}/messages`
+      const { data, error } = await supabase
+        .from("messages")
+        .select("id, role, content")
+        .eq("conversation_id", Number(conversationId))
+        .in("role", ["user", "assistant"])
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      setMessages(
+        (data ?? []).map((m) => ({
+          id: String(m.id),
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        })),
       );
-      if (resp.ok) {
-        const data = await resp.json();
-        setMessages(
-          (data as { id: number; role: string; content: string }[]).map((m) => ({
-            id: String(m.id),
-            role: m.role as "user" | "assistant",
-            content: m.content,
-          }))
-        );
-      }
     } catch (e) {
       console.error(e);
     } finally {
       setIsLoading(false);
     }
-  }, [conversationId, baseUrl]);
+  }, [conversationId]);
 
   useEffect(() => {
     loadMessages();
@@ -111,18 +111,20 @@ export default function ChatScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     try {
-      const resp = await fetch(
-        `${baseUrl}/api/openrouter/conversations/${conversationId}/messages`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            content: text,
-            systemPrompt: params.systemPrompt ?? "",
-            model: model.id,
-          }),
-        }
-      );
+      const resp = await fetch(chatFunctionUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          apikey: SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({
+          conversationId: Number(conversationId),
+          content: text,
+          systemPrompt: params.systemPrompt ?? "",
+          model: model.id,
+        }),
+      });
 
       if (!resp.ok || !resp.body) throw new Error("Stream failed");
 
