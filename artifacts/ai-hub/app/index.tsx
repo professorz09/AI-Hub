@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   View,
   Text,
@@ -7,7 +7,7 @@ import {
   StyleSheet,
   Platform,
   Modal,
-  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -49,6 +49,19 @@ export default function HomeScreen() {
   const [inputText, setInputText] = useState("");
   const [youtubeVisible, setYoutubeVisible] = useState(false);
   const [youtubeUrl, setYoutubeUrl] = useState("");
+  // Inline error for the YouTube modal — replaces the Alert.alert popup
+  // that felt heavy / OS-styled. Cleared on every input change so the
+  // user sees their typing feedback, not a stale error.
+  const [youtubeError, setYoutubeError] = useState<string | null>(null);
+  // Compare-mode picker error — same pattern, surfaces "pick 2 models"
+  // inline instead of via Alert.
+  const [compareError, setCompareError] = useState<string | null>(null);
+  // Disables the send button + shows a spinner while we're creating a
+  // conversation row and navigating to the chat screen. Without this
+  // the tap felt unresponsive — a 300-800 ms gap between send tap and
+  // chat screen mount looked like a frozen UI.
+  const [navigating, setNavigating] = useState(false);
+  const inputRef = useRef<TextInput>(null);
 
   const compareReady = compareMode && compareModels.length === 2;
 
@@ -66,8 +79,10 @@ export default function HomeScreen() {
      *  picker selection. */
     forceModelId?: string;
   }) {
+    if (navigating) return;
     if (!args.forceModelId && compareMode && compareModels.length !== 2) {
-      Alert.alert("Pick 2 models", "Compare mode needs exactly two models.");
+      setCompareError("Pick 2 models to compare");
+      setPickerVisible(true);
       return;
     }
     const useCompare =
@@ -77,6 +92,7 @@ export default function HomeScreen() {
       ? { ...primaryFromState, id: args.forceModelId }
       : primaryFromState;
 
+    setNavigating(true);
     try {
       const { data, error } = await supabase
         .from("conversations")
@@ -102,19 +118,18 @@ export default function HomeScreen() {
           models: useCompare ? compareModels.map((m) => m.id).join(",") : "",
         },
       });
+      // Release the navigating flag a tick later so it doesn't flicker
+      // back to "ready" before the chat screen has actually animated in.
+      setTimeout(() => setNavigating(false), 400);
     } catch (e) {
       console.error(e);
-      Alert.alert("Error", "Couldn't start the conversation. Please try again.");
+      setNavigating(false);
+      setCompareError("Couldn't start the conversation. Try again.");
     }
   }
 
   function handleSend(text: string) {
     if (!text.trim()) return;
-    if (compareMode && compareModels.length !== 2) {
-      Alert.alert("Pick 2 models", "Compare mode needs exactly two models.");
-      setPickerVisible(true);
-      return;
-    }
     startConversation({
       title: text,
       initialMessage: text,
@@ -148,19 +163,24 @@ export default function HomeScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (action.id === "youtube") {
       setYoutubeUrl("");
+      setYoutubeError(null);
       setYoutubeVisible(true);
       return;
     }
-    // "chat" action just focuses the user back on writing — no-op besides haptic.
+    if (action.id === "chat") {
+      // Bring focus to the message input — previously this was a no-op
+      // (just a haptic) which made the button feel broken.
+      inputRef.current?.focus();
+      return;
+    }
   }
 
   function submitYoutube() {
     const url = youtubeUrl.trim();
     const match = url.match(YOUTUBE_URL_RE);
     if (!match) {
-      Alert.alert(
-        "Invalid link",
-        "Please paste a valid YouTube video URL (https://youtube.com/watch?v=... or https://youtu.be/...).",
+      setYoutubeError(
+        "Not a valid YouTube link. Try a https://youtube.com/watch?v=… or https://youtu.be/… URL.",
       );
       return;
     }
@@ -229,33 +249,61 @@ export default function HomeScreen() {
             setPickerVisible(true);
           }}
           style={styles.avatarWrap}
+          hitSlop={8}
         >
           {compareMode ? (
+            // Side-by-side with a clean "vs" pill between, instead of
+            // the earlier overlapping circles which read as one weird
+            // bubble on phones. Empty slot shows a dashed placeholder
+            // so it's obvious the user still needs to pick model #2.
             <View style={styles.compareAvatars}>
-              <View style={{ marginRight: -16, zIndex: 2 }}>
-                <ModelAvatar
-                  model={compareModels[0] ?? selectedModel}
-                  size={76}
-                />
+              <ModelAvatar
+                model={compareModels[0] ?? selectedModel}
+                size={64}
+              />
+              <View
+                style={[
+                  styles.vsPill,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                <Text style={[styles.vsPillText, { color: colors.mutedForeground }]}>
+                  vs
+                </Text>
               </View>
-              <View style={{ opacity: compareModels[1] ? 1 : 0.45 }}>
-                <ModelAvatar
-                  model={compareModels[1] ?? selectedModel}
-                  size={76}
+              {compareModels[1] ? (
+                <ModelAvatar model={compareModels[1]} size={64} />
+              ) : (
+                <View
+                  style={[
+                    styles.avatarPlaceholder,
+                    {
+                      borderColor: colors.border,
+                      backgroundColor: colors.secondary,
+                    },
+                  ]}
+                >
+                  <Ionicons name="add" size={28} color={colors.mutedForeground} />
+                </View>
+              )}
+            </View>
+          ) : (
+            <View style={styles.singleAvatarWrap}>
+              <ModelAvatar model={selectedModel} size={88} />
+              <View
+                style={[
+                  styles.chevron,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                <Ionicons
+                  name="chevron-down"
+                  size={14}
+                  color={colors.mutedForeground}
                 />
               </View>
             </View>
-          ) : (
-            <ModelAvatar model={selectedModel} size={88} />
           )}
-          <View
-            style={[
-              styles.chevron,
-              { backgroundColor: colors.card, borderColor: colors.border },
-            ]}
-          >
-            <Ionicons name="chevron-down" size={14} color={colors.mutedForeground} />
-          </View>
         </Pressable>
 
         {compareMode ? (
@@ -284,29 +332,46 @@ export default function HomeScreen() {
 
         <View style={[styles.inputBar, { backgroundColor: colors.input }]}>
           <TextInput
+            ref={inputRef}
             style={[styles.input, { color: colors.foreground }]}
             placeholder="Write your message..."
             placeholderTextColor={colors.mutedForeground}
             value={inputText}
-            onChangeText={setInputText}
+            onChangeText={(t) => {
+              setInputText(t);
+              if (compareError) setCompareError(null);
+            }}
             returnKeyType="send"
             onSubmitEditing={() => handleSend(inputText)}
+            editable={!navigating}
             multiline={false}
           />
           <Pressable
             hitSlop={8}
             onPress={() => handleSend(inputText)}
-            disabled={!inputText.trim()}
+            disabled={!inputText.trim() || navigating}
             style={[
               styles.sendBtn,
               {
-                backgroundColor: inputText.trim() ? colors.primary : colors.accent,
+                backgroundColor:
+                  inputText.trim() && !navigating
+                    ? colors.primary
+                    : colors.accent,
               },
             ]}
           >
-            <Ionicons name="arrow-up" size={18} color={colors.primaryForeground} />
+            {navigating ? (
+              <ActivityIndicator size="small" color={colors.primaryForeground} />
+            ) : (
+              <Ionicons name="arrow-up" size={18} color={colors.primaryForeground} />
+            )}
           </Pressable>
         </View>
+        {compareError && (
+          <Text style={[styles.inlineError, { color: colors.destructive ?? "#F87171" }]}>
+            {compareError}
+          </Text>
+        )}
       </View>
 
       <QuickActions onSelect={handleQuickAction} />
@@ -361,19 +426,36 @@ export default function HomeScreen() {
               {
                 backgroundColor: colors.input,
                 color: colors.foreground,
-                borderColor: colors.border,
+                borderColor: youtubeError
+                  ? (colors.destructive ?? "#F87171")
+                  : colors.border,
               },
             ]}
             placeholder="https://youtube.com/watch?v=..."
             placeholderTextColor={colors.mutedForeground}
             value={youtubeUrl}
-            onChangeText={setYoutubeUrl}
+            onChangeText={(t) => {
+              setYoutubeUrl(t);
+              if (youtubeError) setYoutubeError(null);
+            }}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
             returnKeyType="go"
             onSubmitEditing={submitYoutube}
           />
+          {youtubeError && (
+            <View style={styles.ytErrorRow}>
+              <Ionicons
+                name="alert-circle"
+                size={14}
+                color={colors.destructive ?? "#F87171"}
+              />
+              <Text style={[styles.ytErrorText, { color: colors.destructive ?? "#F87171" }]}>
+                {youtubeError}
+              </Text>
+            </View>
+          )}
           <View style={styles.ytActions}>
             <Pressable
               style={[styles.ytBtn, { backgroundColor: colors.secondary }]}
@@ -440,6 +522,49 @@ const styles = StyleSheet.create({
   compareAvatars: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 14,
+  },
+  singleAvatarWrap: {
+    position: "relative",
+  },
+  avatarPlaceholder: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 2,
+    borderStyle: "dashed",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  vsPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  vsPillText: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  inlineError: {
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
+    marginTop: 8,
+    textAlign: "center",
+  },
+  ytErrorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: -6,
+  },
+  ytErrorText: {
+    flex: 1,
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
+    lineHeight: 16,
   },
   center: {
     flex: 1,

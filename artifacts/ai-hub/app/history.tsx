@@ -134,9 +134,11 @@ export default function HistoryScreen() {
           <Ionicons name="chevron-back" size={26} color={colors.foreground} />
         </Pressable>
         <Text style={[styles.title, { color: colors.foreground }]}>History</Text>
-        <Pressable hitSlop={8}>
-          <Ionicons name="settings-outline" size={22} color={colors.mutedForeground} />
-        </Pressable>
+        {/* Right-side spacer keeps the title visually centred. The
+            previous settings icon had no handler — removing it instead
+            of pretending it works. Wire a real settings route here
+            when one exists. */}
+        <View style={styles.rightSpacer} />
       </View>
 
       <ScrollView
@@ -145,29 +147,58 @@ export default function HistoryScreen() {
         style={styles.filters}
         contentContainerStyle={styles.filtersContent}
       >
-        {FILTER_CATEGORIES.map((cat) => (
-          <Pressable
-            key={cat}
-            style={[
-              styles.chip,
-              {
-                backgroundColor: filter === cat ? colors.secondary : "transparent",
-                borderColor: filter === cat ? colors.border : "transparent",
-              },
-            ]}
-            onPress={() => setFilter(cat)}
-          >
-            {cat === "Chat" && (
-              <Ionicons name="chatbubbles-outline" size={14} color={colors.mutedForeground} style={{ marginRight: 4 }} />
-            )}
-            {cat === "YouTube" && (
-              <Ionicons name="logo-youtube" size={14} color="#FF0000" style={{ marginRight: 4 }} />
-            )}
-            <Text style={[styles.chipText, { color: colors.mutedForeground }]}>
-              {cat}
-            </Text>
-          </Pressable>
-        ))}
+        {FILTER_CATEGORIES.map((cat) => {
+          const active = filter === cat;
+          const iconTint = active
+            ? cat === "YouTube"
+              ? "#FF0000"
+              : colors.primaryForeground
+            : cat === "YouTube"
+              ? "#FF0000"
+              : colors.mutedForeground;
+          return (
+            <Pressable
+              key={cat}
+              style={[
+                styles.chip,
+                {
+                  backgroundColor: active ? colors.primary : "transparent",
+                  borderColor: active ? colors.primary : colors.border,
+                },
+              ]}
+              onPress={() => setFilter(cat)}
+            >
+              {cat === "Chat" && (
+                <Ionicons
+                  name="chatbubbles-outline"
+                  size={14}
+                  color={iconTint}
+                  style={{ marginRight: 4 }}
+                />
+              )}
+              {cat === "YouTube" && (
+                <Ionicons
+                  name="logo-youtube"
+                  size={14}
+                  color={iconTint}
+                  style={{ marginRight: 4 }}
+                />
+              )}
+              <Text
+                style={[
+                  styles.chipText,
+                  {
+                    color: active
+                      ? colors.primaryForeground
+                      : colors.mutedForeground,
+                  },
+                ]}
+              >
+                {cat}
+              </Text>
+            </Pressable>
+          );
+        })}
       </ScrollView>
 
       {loading ? (
@@ -271,6 +302,11 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_700Bold",
     fontSize: 20,
     textAlign: "center",
+  },
+  rightSpacer: {
+    // Same width as the chevron-back icon (26) + hitSlop margin so the
+    // title stays optically centred without the settings icon.
+    width: 26,
   },
   filters: {
     maxHeight: 52,
