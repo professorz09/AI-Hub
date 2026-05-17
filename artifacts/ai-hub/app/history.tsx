@@ -7,7 +7,8 @@ import {
   StyleSheet,
   ActivityIndicator,
   ScrollView,
-  Alert,
+  Modal,
+  TextInput,
   Platform,
 } from "react-native";
 import { router, useFocusEffect } from "expo-router";
@@ -56,6 +57,17 @@ export default function HistoryScreen() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("All");
+  // Per-row 3-dot menu / rename / delete-confirm state. Replaces the
+  // OS-styled Alert.alert that only offered Delete — users wanted
+  // Rename too, and the white iOS/Android alert clashed with the dark
+  // app shell.
+  const [menuConv, setMenuConv] = useState<Conversation | null>(null);
+  const [renameConv, setRenameConv] = useState<Conversation | null>(null);
+  const [renameText, setRenameText] = useState("");
+  const [renameSaving, setRenameSaving] = useState(false);
+  const [confirmDelConv, setConfirmDelConv] = useState<Conversation | null>(
+    null,
+  );
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
@@ -96,15 +108,30 @@ export default function HistoryScreen() {
     }
   }
 
-  function confirmDelete(conv: Conversation) {
-    Alert.alert("Delete conversation", `Delete "${conv.title}"?`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: () => deleteConversation(conv.id),
-      },
-    ]);
+  async function commitRename() {
+    if (!renameConv) return;
+    const next = renameText.trim().slice(0, 60);
+    if (!next || next === renameConv.title) {
+      setRenameConv(null);
+      return;
+    }
+    setRenameSaving(true);
+    try {
+      const { error } = await supabase
+        .from("conversations")
+        .update({ title: next })
+        .eq("id", renameConv.id);
+      if (error) throw error;
+      setConversations((prev) =>
+        prev.map((c) => (c.id === renameConv.id ? { ...c, title: next } : c)),
+      );
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setRenameConv(null);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setRenameSaving(false);
+    }
   }
 
   const filtered =
@@ -266,10 +293,11 @@ export default function HistoryScreen() {
                   // Stop the nested press from bubbling to the row's
                   // onPress (which opens the chat). Without this the
                   // user tapping the ⋮ menu also opened the chat
-                  // behind the confirm alert.
+                  // behind the menu sheet.
                   onPress={(e) => {
                     e.stopPropagation();
-                    confirmDelete(conv);
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setMenuConv(conv);
                   }}
                 >
                   <Ionicons
@@ -284,6 +312,217 @@ export default function HistoryScreen() {
           contentContainerStyle={{ paddingBottom: bottomInset + 16 }}
         />
       )}
+
+      {/* Action menu — Rename + Delete. Opens when the row's 3-dot is
+          tapped; dismisses on backdrop tap or option selection. */}
+      <Modal
+        transparent
+        visible={!!menuConv}
+        animationType="fade"
+        onRequestClose={() => setMenuConv(null)}
+      >
+        <Pressable
+          style={styles.menuOverlay}
+          onPress={() => setMenuConv(null)}
+        >
+          <View
+            style={[
+              styles.menuCard,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <Pressable
+              style={({ pressed }) => [
+                styles.menuItem,
+                {
+                  backgroundColor: pressed
+                    ? "rgba(255,255,255,0.06)"
+                    : "transparent",
+                },
+              ]}
+              onPress={() => {
+                const c = menuConv;
+                if (!c) return;
+                setMenuConv(null);
+                setRenameText(c.title);
+                setRenameConv(c);
+              }}
+            >
+              <Ionicons
+                name="pencil-outline"
+                size={18}
+                color={colors.foreground}
+              />
+              <Text
+                style={[styles.menuLabel, { color: colors.foreground }]}
+              >
+                Rename
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.menuItem,
+                {
+                  backgroundColor: pressed
+                    ? "rgba(248,113,113,0.12)"
+                    : "transparent",
+                },
+              ]}
+              onPress={() => {
+                const c = menuConv;
+                if (!c) return;
+                setMenuConv(null);
+                setConfirmDelConv(c);
+              }}
+            >
+              <Ionicons name="trash-outline" size={18} color="#F87171" />
+              <Text style={[styles.menuLabel, { color: "#F87171" }]}>
+                Delete
+              </Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* Rename dialog */}
+      <Modal
+        transparent
+        visible={!!renameConv}
+        animationType="fade"
+        onRequestClose={() => setRenameConv(null)}
+      >
+        <Pressable
+          style={styles.menuOverlay}
+          onPress={() => setRenameConv(null)}
+        >
+          <Pressable
+            style={[
+              styles.dialogCard,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+            onPress={() => {}}
+          >
+            <Text style={[styles.dialogTitle, { color: colors.foreground }]}>
+              Rename conversation
+            </Text>
+            <TextInput
+              style={[
+                styles.dialogInput,
+                {
+                  backgroundColor: colors.input,
+                  color: colors.foreground,
+                  borderColor: colors.border,
+                },
+              ]}
+              value={renameText}
+              onChangeText={setRenameText}
+              placeholder="Title"
+              placeholderTextColor={colors.mutedForeground}
+              autoFocus
+              maxLength={60}
+              returnKeyType="done"
+              onSubmitEditing={commitRename}
+            />
+            <View style={styles.dialogActions}>
+              <Pressable
+                style={[styles.dialogBtn, { backgroundColor: colors.secondary }]}
+                onPress={() => setRenameConv(null)}
+                disabled={renameSaving}
+              >
+                <Text
+                  style={[styles.dialogBtnText, { color: colors.foreground }]}
+                >
+                  Cancel
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.dialogBtn,
+                  {
+                    backgroundColor:
+                      renameText.trim() && !renameSaving
+                        ? colors.primary
+                        : colors.accent,
+                  },
+                ]}
+                onPress={commitRename}
+                disabled={!renameText.trim() || renameSaving}
+              >
+                {renameSaving ? (
+                  <ActivityIndicator
+                    size="small"
+                    color={colors.primaryForeground}
+                  />
+                ) : (
+                  <Text
+                    style={[
+                      styles.dialogBtnText,
+                      { color: colors.primaryForeground },
+                    ]}
+                  >
+                    Save
+                  </Text>
+                )}
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Delete-confirm dialog */}
+      <Modal
+        transparent
+        visible={!!confirmDelConv}
+        animationType="fade"
+        onRequestClose={() => setConfirmDelConv(null)}
+      >
+        <Pressable
+          style={styles.menuOverlay}
+          onPress={() => setConfirmDelConv(null)}
+        >
+          <Pressable
+            style={[
+              styles.dialogCard,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+            onPress={() => {}}
+          >
+            <Text style={[styles.dialogTitle, { color: colors.foreground }]}>
+              Delete conversation
+            </Text>
+            <Text
+              style={[styles.dialogBody, { color: colors.mutedForeground }]}
+              numberOfLines={2}
+            >
+              Delete &quot;{confirmDelConv?.title}&quot;? This can&apos;t be undone.
+            </Text>
+            <View style={styles.dialogActions}>
+              <Pressable
+                style={[styles.dialogBtn, { backgroundColor: colors.secondary }]}
+                onPress={() => setConfirmDelConv(null)}
+              >
+                <Text
+                  style={[styles.dialogBtnText, { color: colors.foreground }]}
+                >
+                  Cancel
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[styles.dialogBtn, { backgroundColor: "#F87171" }]}
+                onPress={() => {
+                  const c = confirmDelConv;
+                  setConfirmDelConv(null);
+                  if (c) deleteConversation(c.id);
+                }}
+              >
+                <Text style={[styles.dialogBtnText, { color: "#FFFFFF" }]}>
+                  Delete
+                </Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -365,5 +604,72 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
     fontSize: 12,
     marginTop: 2,
+  },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 28,
+  },
+  menuCard: {
+    minWidth: 220,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 6,
+  },
+  menuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+  },
+  menuLabel: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 15,
+  },
+  dialogCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 16,
+    gap: 14,
+  },
+  dialogTitle: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 17,
+  },
+  dialogBody: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 14,
+    lineHeight: 19,
+  },
+  dialogInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontFamily: "Inter_400Regular",
+    fontSize: 15,
+  },
+  dialogActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 2,
+  },
+  dialogBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dialogBtnText: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 15,
   },
 });

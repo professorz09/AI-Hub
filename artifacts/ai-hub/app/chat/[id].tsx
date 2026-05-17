@@ -451,9 +451,16 @@ export default function ChatScreen() {
           }),
         ),
       );
-      sendingRef.current = false;
-      if (activeAbortRef.current === abort) activeAbortRef.current = null;
-      inputRef.current?.focus();
+      // Only release the global send/streaming flags if this same
+      // request is still the active one. If the user hit Stop and then
+      // immediately sent a new message, activeAbortRef has moved on —
+      // clobbering sendingRef here would let a third send slip past
+      // the race-guard while the new stream is still in flight.
+      if (activeAbortRef.current === abort) {
+        sendingRef.current = false;
+        activeAbortRef.current = null;
+        inputRef.current?.focus();
+      }
       return;
     }
 
@@ -510,10 +517,45 @@ export default function ChatScreen() {
         );
       },
     });
-    setIsStreaming(false);
+    // Same guard as compare mode — if a stopStream + new send already
+    // superseded this stream, leave the new stream's flags alone.
+    if (activeAbortRef.current === abort) {
+      setIsStreaming(false);
+      sendingRef.current = false;
+      activeAbortRef.current = null;
+      inputRef.current?.focus();
+    }
+  }
+
+  /** Interrupt the in-flight stream. Used by the Stop button that
+   *  replaces Send while a reply is generating. Drains any RAF-buffered
+   *  deltas first so the partial sentence the model already emitted
+   *  isn't lost (visually truncates mid-word otherwise), then aborts
+   *  the SSE pipe and settles every still-streaming row so the typing
+   *  cursor disappears and the input becomes a Send button again. */
+  function stopStream() {
+    if (!anyStreaming) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    activeAbortRef.current?.abort();
+    activeAbortRef.current = null;
+    flushDeltasNow();
+    if (mode === "compare") {
+      setColumns((prev) =>
+        prev.map((c) => ({
+          ...c,
+          streaming: false,
+          messages: c.messages.map((m) =>
+            m.streaming ? { ...m, streaming: false } : m,
+          ),
+        })),
+      );
+    } else {
+      setIsStreaming(false);
+      setMessages((prev) =>
+        prev.map((m) => (m.streaming ? { ...m, streaming: false } : m)),
+      );
+    }
     sendingRef.current = false;
-    if (activeAbortRef.current === abort) activeAbortRef.current = null;
-    inputRef.current?.focus();
   }
 
   /** Find the user message that prompted this assistant turn and
@@ -732,19 +774,25 @@ export default function ChatScreen() {
               style={[
                 styles.sendBtn,
                 {
-                  backgroundColor:
-                    inputText.trim() && !anyStreaming
+                  backgroundColor: anyStreaming
+                    ? colors.foreground
+                    : inputText.trim()
                       ? colors.primary
                       : colors.accent,
                 },
               ]}
-              onPress={() => sendMessage(inputText)}
-              disabled={!inputText.trim() || anyStreaming}
+              onPress={() => {
+                if (anyStreaming) stopStream();
+                else sendMessage(inputText);
+              }}
+              disabled={!anyStreaming && !inputText.trim()}
             >
               <Ionicons
-                name="arrow-up"
-                size={18}
-                color={colors.primaryForeground}
+                name={anyStreaming ? "stop" : "arrow-up"}
+                size={anyStreaming ? 14 : 18}
+                color={
+                  anyStreaming ? colors.background : colors.primaryForeground
+                }
               />
             </Pressable>
           </View>

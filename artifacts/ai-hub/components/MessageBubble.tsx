@@ -98,20 +98,20 @@ function MessageBubbleImpl({
           {showDots ? (
             <TypingDots color={colors.mutedForeground} />
           ) : (
-            <Text
-              selectable={selectable}
-              style={[
-                styles.text,
-                {
-                  color: isUser ? colors.primaryForeground : colors.foreground,
-                },
-              ]}
-            >
-              {content}
-              {streaming && (
-                <Text style={{ color: colors.mutedForeground }}>{"▋"}</Text>
-              )}
-            </Text>
+            <View>
+              <Text
+                selectable={selectable}
+                style={[
+                  styles.text,
+                  {
+                    color: isUser ? colors.primaryForeground : colors.foreground,
+                  },
+                ]}
+              >
+                {content}
+              </Text>
+              {streaming && <BlinkingCursor color={colors.foreground} />}
+            </View>
           )}
         </Pressable>
 
@@ -269,6 +269,39 @@ function MenuItem({
   );
 }
 
+/** Blinking caret that sits beneath the streaming text. Replaces the
+ *  static "▋" character which felt frozen — a slow opacity loop gives
+ *  the visual heartbeat ChatGPT mobile has during generation. */
+function BlinkingCursor({ color }: { color: string }) {
+  const opacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, {
+          toValue: 0.15,
+          duration: 480,
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration: 480,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [opacity]);
+  return (
+    <Animated.View
+      style={[
+        styles.cursor,
+        { backgroundColor: color, opacity },
+      ]}
+    />
+  );
+}
+
 function TypingDots({ color }: { color: string }) {
   const animsRef = useRef([
     new Animated.Value(0.3),
@@ -281,15 +314,15 @@ function TypingDots({ color }: { color: string }) {
     const loops = anims.map((v, i) =>
       Animated.loop(
         Animated.sequence([
-          Animated.delay(i * 200),
+          Animated.delay(i * 140),
           Animated.timing(v, {
             toValue: 1,
-            duration: 400,
+            duration: 300,
             useNativeDriver: true,
           }),
           Animated.timing(v, {
             toValue: 0.3,
-            duration: 400,
+            duration: 300,
             useNativeDriver: true,
           }),
         ]),
@@ -389,6 +422,13 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
+  },
+  cursor: {
+    width: 8,
+    height: 14,
+    marginTop: 4,
+    marginLeft: 1,
+    borderRadius: 2,
   },
   menuOverlay: {
     flex: 1,
