@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Platform,
   Modal,
+  Keyboard,
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -99,7 +100,26 @@ export default function ChatScreen() {
   const flushFrameRef = useRef<number | null>(null);
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
-  const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
+  const bottomInsetRaw = Platform.OS === "web" ? 34 : insets.bottom;
+  // Track keyboard visibility so we can drop the home-gesture-bar
+  // inset while the keyboard is up. Without this, Android edge-to-edge
+  // mode (adjustResize) + the static safe-area inset *both* push the
+  // input upward → a visible empty strip between the input pill and
+  // the keyboard.
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () =>
+      setKeyboardOpen(true),
+    );
+    const hide = Keyboard.addListener("keyboardDidHide", () =>
+      setKeyboardOpen(false),
+    );
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  const bottomInset = keyboardOpen ? 0 : bottomInsetRaw;
 
   const anyStreaming = isStreaming || columns.some((c) => c.streaming);
 
@@ -929,7 +949,7 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_600SemiBold",
     fontSize: 13,
   },
-  listContent: { paddingVertical: 12, paddingHorizontal: 0 },
+  listContent: { paddingVertical: 12, paddingHorizontal: 12 },
   inputArea: {
     borderTopWidth: 0.5,
     paddingTop: 10,
