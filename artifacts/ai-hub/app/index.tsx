@@ -25,8 +25,19 @@ import {
 } from "@/constants/models";
 import { supabase } from "@/lib/supabase";
 
+// Strict YouTube URL matcher — require https:// and canonical host to
+// avoid feeding attacker-controlled strings into the LLM prompt as
+// "trusted" content. Captures the 11-char video id so we can pass a
+// normalised https://youtu.be/<id> URL to the model instead of the raw
+// input.
 const YOUTUBE_URL_RE =
-  /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/|live\/)|youtu\.be\/)[\w-]{6,}/i;
+  /^https:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})(?:[?&#].*)?$/;
+
+// Hardcoded YouTube-summary model. The video summary task benefits from
+// Gemini's longer context + cheaper price, and pinning it here means
+// the YouTube quick action always runs against the same model (even if
+// the user has a different one selected on the home picker).
+const YOUTUBE_MODEL_ID = "google/gemini-2.0-flash-exp:free";
 
 export default function HomeScreen() {
   const colors = useColors();
@@ -49,13 +60,22 @@ export default function HomeScreen() {
     initialMessage: string;
     systemPrompt: string;
     category: string;
+    /** Force a specific model id, bypassing the home picker + compare
+     *  mode. Used by quick actions like YouTube summary that always
+     *  run against the same model regardless of the user's current
+     *  picker selection. */
+    forceModelId?: string;
   }) {
-    if (compareMode && compareModels.length !== 2) {
+    if (!args.forceModelId && compareMode && compareModels.length !== 2) {
       Alert.alert("Pick 2 models", "Compare mode needs exactly two models.");
       return;
     }
-    const useCompare = compareMode && compareModels.length === 2;
-    const primary = useCompare ? compareModels[0]! : selectedModel;
+    const useCompare =
+      !args.forceModelId && compareMode && compareModels.length === 2;
+    const primaryFromState = useCompare ? compareModels[0]! : selectedModel;
+    const primary = args.forceModelId
+      ? { ...primaryFromState, id: args.forceModelId }
+      : primaryFromState;
 
     try {
       const { data, error } = await supabase
@@ -136,20 +156,32 @@ export default function HomeScreen() {
 
   function submitYoutube() {
     const url = youtubeUrl.trim();
-    if (!YOUTUBE_URL_RE.test(url)) {
+    const match = url.match(YOUTUBE_URL_RE);
+    if (!match) {
       Alert.alert(
         "Invalid link",
-        "Please paste a valid YouTube video URL (youtube.com/watch?v=... or youtu.be/...).",
+        "Please paste a valid YouTube video URL (https://youtube.com/watch?v=... or https://youtu.be/...).",
       );
       return;
     }
+    // Pass only the canonical short-form URL with the 11-char id we
+    // captured. Strips tracking params, playlist contexts, and any
+    // attacker-controlled query string that might otherwise reach the
+    // model as authoritative content.
+    const videoId = match[1];
+    const cleanUrl = `https://youtu.be/${videoId}`;
     const youtube = QUICK_ACTIONS.find((a) => a.id === "youtube")!;
     setYoutubeVisible(false);
+    // Force Gemini for the initial summary turn. After that, the
+    // user can switch model from the chat header picker for follow-up
+    // turns — the conversation row's `model` column is updated by the
+    // chat screen's model swap, so subsequent sends use the new pick.
     startConversation({
       title: "YouTube Summary",
-      initialMessage: `Please summarize this YouTube video:\n${url}`,
+      initialMessage: `Please summarize this YouTube video:\n${cleanUrl}`,
       systemPrompt: youtube.systemPrompt,
       category: "youtube",
+      forceModelId: YOUTUBE_MODEL_ID,
     });
   }
 

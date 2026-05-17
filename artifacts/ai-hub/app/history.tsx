@@ -232,7 +232,14 @@ export default function HistoryScreen() {
                 </View>
                 <Pressable
                   hitSlop={8}
-                  onPress={() => confirmDelete(conv)}
+                  // Stop the nested press from bubbling to the row's
+                  // onPress (which opens the chat). Without this the
+                  // user tapping the ⋮ menu also opened the chat
+                  // behind the confirm alert.
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    confirmDelete(conv);
+                  }}
                 >
                   <Ionicons
                     name="ellipsis-vertical"

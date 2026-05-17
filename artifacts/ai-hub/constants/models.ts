@@ -85,6 +85,15 @@ export function getModelById(id: string): AIModel {
   return AI_MODELS.find((m) => m.id === id) ?? DEFAULT_MODEL;
 }
 
+/** True iff `id` matches a currently-known model. Use to detect when an
+ *  old conversation references a model that has since been renamed or
+ *  removed — otherwise getModelById silently degrades to Claude and
+ *  the two sources of truth (UI label vs server-stored id) diverge. */
+export function isKnownModel(id: string | null | undefined): boolean {
+  if (!id) return false;
+  return AI_MODELS.some((m) => m.id === id);
+}
+
 export interface QuickAction {
   id: "chat" | "youtube";
   name: string;

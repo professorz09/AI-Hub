@@ -3,7 +3,8 @@
 //
 // Request body:
 //   { conversationId: number, content: string,
-//     systemPrompt?: string, model?: string }
+//     systemPrompt?: string, model?: string,
+//     skipUserInsert?: boolean, historyForModel?: string | null }
 //
 // Response: text/event-stream
 //   data: {"content":"..."}\n\n   (deltas)
@@ -18,6 +19,31 @@ const CORS_HEADERS = {
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+// Server-side allowlist of acceptable OpenRouter model IDs. Mirrors
+// AI_MODELS in artifacts/ai-hub/constants/models.ts. Pinning this list
+// here stops a client from billing the project against arbitrary
+// expensive models (Opus / GPT-5 / etc.) by hand-crafting the request.
+// Keep this in sync with AI_MODELS when new models are added there.
+const ALLOWED_MODELS = new Set<string>([
+  "anthropic/claude-3.5-sonnet",
+  "deepseek/deepseek-chat",
+  "openai/gpt-4o-mini",
+  "qwen/qwen-2.5-72b-instruct",
+  "google/gemini-2.0-flash-exp:free",
+  "meta-llama/llama-3.3-70b-instruct",
+]);
+
+// How many of the most recent messages to feed back to the model as
+// context. 10 ≈ last 5 user/assistant turns — keeps recent intent
+// fresh while holding token cost roughly constant as a chat ages.
+// Tune via the env var CHAT_HISTORY_LIMIT if a deployment needs a
+// different ceiling.
+const HISTORY_LIMIT_DEFAULT = 10;
+const HISTORY_LIMIT = Math.max(
+  2,
+  Math.min(100, Number(Deno.env.get("CHAT_HISTORY_LIMIT")) || HISTORY_LIMIT_DEFAULT),
+);
 
 interface ReqBody {
   conversationId: number;
@@ -36,6 +62,13 @@ function sse(obj: unknown): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(obj)}\n\n`);
 }
 
+function jsonErr(status: number, message: string): Response {
+  return new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+  });
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: CORS_HEADERS });
@@ -48,10 +81,7 @@ Deno.serve(async (req) => {
   try {
     body = await req.json();
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON" }), {
-      status: 400,
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-    });
+    return jsonErr(400, "Invalid JSON");
   }
 
   const {
@@ -63,13 +93,15 @@ Deno.serve(async (req) => {
     historyForModel,
   } = body;
   if (!conversationId || !content?.trim()) {
-    return new Response(
-      JSON.stringify({ error: "conversationId and content are required" }),
-      {
-        status: 400,
-        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-      },
-    );
+    return jsonErr(400, "conversationId and content are required");
+  }
+
+  // Reject runaway prompts before they reach the LLM. 32 KB of input
+  // is already 8-10k tokens which is a generous upper bound for a
+  // single user turn — anything bigger is almost certainly junk
+  // (e.g. someone pasting an entire log file).
+  if (content.length > 32_000) {
+    return jsonErr(400, "Message too long (max 32k characters)");
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -77,13 +109,7 @@ Deno.serve(async (req) => {
   const openrouterKey = Deno.env.get("OPENROUTER_API_KEY");
 
   if (!supabaseUrl || !serviceRoleKey || !openrouterKey) {
-    return new Response(
-      JSON.stringify({ error: "Server is missing environment variables" }),
-      {
-        status: 500,
-        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-      },
-    );
+    return jsonErr(500, "Server is missing environment variables");
   }
 
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
@@ -97,10 +123,16 @@ Deno.serve(async (req) => {
     .single();
 
   if (convErr || !conv) {
-    return new Response(JSON.stringify({ error: "Conversation not found" }), {
-      status: 404,
-      headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-    });
+    return jsonErr(404, "Conversation not found");
+  }
+
+  // Reject any model id not in the server allowlist. The conversation
+  // table's stored model is allowed even if the allowlist later shrinks
+  // (so existing chats keep working) — but a client-supplied override
+  // must be in the current list.
+  const requestedModel = (model?.trim() || conv.model) as string;
+  if (!ALLOWED_MODELS.has(requestedModel) && requestedModel !== conv.model) {
+    return jsonErr(400, "Unsupported model");
   }
 
   if (!skipUserInsert) {
@@ -108,34 +140,24 @@ Deno.serve(async (req) => {
       .from("messages")
       .insert({ conversation_id: conversationId, role: "user", content });
     if (insertUserErr) {
-      return new Response(
-        JSON.stringify({ error: "Failed to save user message" }),
-        {
-          status: 500,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-        },
-      );
+      return jsonErr(500, "Failed to save user message");
     }
   }
 
-  // In compare mode each model only sees its own column: user turns + this
-  // model's prior assistant turns. Otherwise feed the full transcript.
-  let historyQuery = supabase
+  // Pull only the most recent N messages so context (and token cost)
+  // doesn't grow unbounded as a chat ages. We fetch in descending order
+  // for the LIMIT to apply at the tail, then reverse to chronological
+  // for the LLM call.
+  const { data: recent, error: histErr } = await supabase
     .from("messages")
     .select("role, content, model")
     .eq("conversation_id", conversationId)
-    .order("created_at", { ascending: true });
-
-  const { data: history, error: histErr } = await historyQuery;
-  if (histErr || !history) {
-    return new Response(
-      JSON.stringify({ error: "Failed to load history" }),
-      {
-        status: 500,
-        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-      },
-    );
+    .order("created_at", { ascending: false })
+    .limit(HISTORY_LIMIT);
+  if (histErr || !recent) {
+    return jsonErr(500, "Failed to load history");
   }
+  const history = recent.slice().reverse();
 
   const messages: { role: "system" | "user" | "assistant"; content: string }[] =
     [];
@@ -143,8 +165,17 @@ Deno.serve(async (req) => {
     messages.push({ role: "system", content: systemPrompt });
   }
   for (const m of history) {
-    const role = m.role as "user" | "assistant";
-    // Filter assistant turns to this model's column when in compare mode.
+    // Defensive role clamp: drop anything that isn't a real chat turn.
+    // Without this, a poisoned row (e.g. role="system" smuggled past the
+    // CHECK constraint by direct SQL) would replay as a trusted turn.
+    const rawRole = m.role;
+    const role: "user" | "assistant" =
+      rawRole === "user" ? "user"
+      : rawRole === "assistant" ? "assistant"
+      : "user"; // unknown role degrades to a user turn, never to system
+    if (rawRole !== "user" && rawRole !== "assistant") continue;
+    // Compare-mode filter: a model only sees its own prior assistant
+    // turns. User turns are always included.
     if (
       role === "assistant" &&
       historyForModel != null &&
@@ -166,7 +197,7 @@ Deno.serve(async (req) => {
         "X-Title": "AI Hub",
       },
       body: JSON.stringify({
-        model: model?.trim() || conv.model,
+        model: requestedModel,
         messages,
         max_tokens: 8192,
         stream: true,
@@ -176,13 +207,7 @@ Deno.serve(async (req) => {
 
   if (!openrouterResp.ok || !openrouterResp.body) {
     const errText = await openrouterResp.text().catch(() => "");
-    return new Response(
-      JSON.stringify({ error: `OpenRouter error: ${errText.slice(0, 200)}` }),
-      {
-        status: 502,
-        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-      },
-    );
+    return jsonErr(502, `OpenRouter error: ${errText.slice(0, 200)}`);
   }
 
   const stream = new ReadableStream<Uint8Array>({
@@ -191,6 +216,25 @@ Deno.serve(async (req) => {
       const reader = openrouterResp.body!.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+      // Whatever has streamed gets flushed to the DB regardless of how
+      // the stream ends (clean end, network drop, OpenRouter error,
+      // client disconnect). Earlier the insert sat inside the try block,
+      // so a drop mid-stream left the UI showing text the DB never saw —
+      // and the next reload made the message vanish.
+      const flush = async () => {
+        if (!full) return;
+        try {
+          await supabase.from("messages").insert({
+            conversation_id: conversationId,
+            role: "assistant",
+            content: full,
+            model: requestedModel,
+          });
+        } catch (_) {
+          // Swallow — we've already streamed to the client; failing to
+          // persist is a degraded state but not a fatal one.
+        }
+      };
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -216,16 +260,10 @@ Deno.serve(async (req) => {
           }
         }
 
-        if (full) {
-          await supabase.from("messages").insert({
-            conversation_id: conversationId,
-            role: "assistant",
-            content: full,
-            model: model?.trim() || conv.model,
-          });
-        }
+        await flush();
         controller.enqueue(sse({ done: true }));
       } catch (err) {
+        await flush();
         controller.enqueue(
           sse({ error: err instanceof Error ? err.message : "Stream failed" }),
         );

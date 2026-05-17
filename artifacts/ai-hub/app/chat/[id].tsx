@@ -82,11 +82,31 @@ export default function ChatScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const inputRef = useRef<TextInput>(null);
   const hasSentInitial = useRef(false);
+  // Ref-mirror of "is any stream in flight" used to guard against the
+  // rapid-double-tap race: reading the state version inside sendMessage's
+  // closure can see a stale `false` if the user fires Enter twice before
+  // React commits setIsStreaming(true). The ref is set synchronously.
+  const sendingRef = useRef(false);
+  // Active stream's AbortController. Cancels both the fetch + reader on
+  // navigation away / new send so we don't leak the SSE pipe (and don't
+  // setState on an unmounted screen).
+  const activeAbortRef = useRef<AbortController | null>(null);
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
   const anyStreaming = isStreaming || columns.some((c) => c.streaming);
+
+  // Abort any live stream on unmount so reader.read() promises resolve
+  // and the route can tear down cleanly. Without this, navigating away
+  // mid-stream produced "state update on unmounted component" warnings
+  // and the assistant row was still written to the DB out-of-band.
+  useEffect(() => {
+    return () => {
+      activeAbortRef.current?.abort();
+      activeAbortRef.current = null;
+    };
+  }, []);
 
   const loadMessages = useCallback(async () => {
     try {
@@ -156,6 +176,7 @@ export default function ChatScreen() {
     assistantId: string;
     skipUserInsert: boolean;
     historyForModel: string | null;
+    signal: AbortSignal;
     onChunk: (delta: string) => void;
     onDone: () => void;
     onError: (msg: string) => void;
@@ -176,44 +197,59 @@ export default function ChatScreen() {
           skipUserInsert: args.skipUserInsert,
           historyForModel: args.historyForModel,
         }),
+        signal: args.signal,
       });
       if (!resp.ok || !resp.body) throw new Error("Stream failed");
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
-          if (!data) continue;
-          try {
-            const parsed = JSON.parse(data) as {
-              content?: string;
-              done?: boolean;
-              error?: string;
-            };
-            if (parsed.error) {
-              args.onError(parsed.error);
-              return;
+      // If the user navigates away or fires a new send, abort the
+      // reader so reader.read() unblocks instead of holding the SSE
+      // pipe open indefinitely.
+      const onAbort = () => { reader.cancel().catch(() => {}); };
+      args.signal.addEventListener("abort", onAbort, { once: true });
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (args.signal.aborted) return;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6).trim();
+            if (!data) continue;
+            try {
+              const parsed = JSON.parse(data) as {
+                content?: string;
+                done?: boolean;
+                error?: string;
+              };
+              if (parsed.error) {
+                args.onError(parsed.error);
+                return;
+              }
+              if (parsed.done) {
+                args.onDone();
+                return;
+              }
+              if (parsed.content) args.onChunk(parsed.content);
+            } catch {
+              // ignore
             }
-            if (parsed.done) {
-              args.onDone();
-              return;
-            }
-            if (parsed.content) args.onChunk(parsed.content);
-          } catch {
-            // ignore
           }
         }
+        args.onDone();
+      } finally {
+        args.signal.removeEventListener("abort", onAbort);
       }
-      args.onDone();
     } catch (e) {
+      // AbortError is the cleanup path, not an error. Swallow so the UI
+      // doesn't flash "Something went wrong" when the user navigates
+      // away mid-stream.
+      if (args.signal.aborted) return;
       args.onError(
         e instanceof Error ? e.message : "Something went wrong. Try again.",
       );
@@ -221,7 +257,20 @@ export default function ChatScreen() {
   }
 
   async function sendMessage(text: string) {
-    if (!text.trim() || anyStreaming) return;
+    if (!text.trim()) return;
+    // Synchronous race-guard. anyStreaming reads React state and lags
+    // a render; a double-tap on the send button (or fast Enter) could
+    // slip a second send through before setIsStreaming(true) committed.
+    if (sendingRef.current || anyStreaming) return;
+    sendingRef.current = true;
+
+    // Cancel any previous live stream (defensive — shouldn't happen
+    // because of the guard above, but if a stream finished but was
+    // never observed cleared, this releases it).
+    activeAbortRef.current?.abort();
+    const abort = new AbortController();
+    activeAbortRef.current = abort;
+
     setInputText("");
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -268,7 +317,11 @@ export default function ChatScreen() {
         })),
       );
 
-      await Promise.all(
+      // allSettled so one model failing doesn't abandon the other
+      // mid-stream. Each branch's onDone/onError already updates its
+      // column independently — the wait here just keeps the input
+      // disabled until both columns have settled.
+      await Promise.allSettled(
         placeholders.map(({ col, assistantId }) =>
           streamOne({
             text,
@@ -276,6 +329,7 @@ export default function ChatScreen() {
             assistantId,
             skipUserInsert: true,
             historyForModel: col.model.id,
+            signal: abort.signal,
             onChunk: (delta) =>
               setColumns((prev) =>
                 prev.map((c) =>
@@ -324,6 +378,8 @@ export default function ChatScreen() {
           }),
         ),
       );
+      sendingRef.current = false;
+      if (activeAbortRef.current === abort) activeAbortRef.current = null;
       inputRef.current?.focus();
       return;
     }
@@ -354,6 +410,7 @@ export default function ChatScreen() {
       assistantId,
       skipUserInsert: false,
       historyForModel: null,
+      signal: abort.signal,
       onChunk: (delta) =>
         setMessages((prev) =>
           prev.map((m) =>
@@ -376,6 +433,8 @@ export default function ChatScreen() {
         ),
     });
     setIsStreaming(false);
+    sendingRef.current = false;
+    if (activeAbortRef.current === abort) activeAbortRef.current = null;
     inputRef.current?.focus();
   }
 
@@ -391,6 +450,7 @@ export default function ChatScreen() {
             role={item.role}
             content={item.content}
             streaming={!!item.streaming}
+            modelId={item.model ?? (item.role === "assistant" ? model.id : undefined)}
           />
         )}
         keyboardDismissMode="interactive"
@@ -408,7 +468,7 @@ export default function ChatScreen() {
           { paddingTop: topInset + 8, borderBottomColor: colors.border },
         ]}
       >
-        <Pressable onPress={() => router.back()} hitSlop={8}>
+        <Pressable onPress={() => router.push("/history")} hitSlop={8}>
           <Ionicons name="menu" size={26} color={colors.foreground} />
         </Pressable>
 
@@ -469,8 +529,14 @@ export default function ChatScreen() {
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior="padding"
-        keyboardVerticalOffset={0}
+        // iOS lifts the whole view with padding; Android handles soft
+        // keyboard via adjustResize at the window level. Setting
+        // behavior="padding" on Android with offset=0 caused the input
+        // to sit *under* the keyboard on edge-to-edge devices — fixed
+        // by switching Android to "height" and offsetting by the
+        // header height so the FlatList collapses, not the input row.
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? topInset + 56 : 0}
       >
         {isLoading ? (
           <View style={styles.loadingCenter}>
