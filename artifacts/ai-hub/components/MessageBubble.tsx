@@ -78,12 +78,12 @@ function MessageBubbleImpl({
         isUser ? styles.rowRight : styles.rowLeft,
       ]}
     >
-      {!isUser && model && (
-        <View style={styles.avatarSlot}>
-          <ModelAvatar model={model} size={26} />
-        </View>
-      )}
       <View style={isUser ? styles.userCol : styles.assistantCol}>
+        {!isUser && model && (
+          <View style={styles.assistantHeader}>
+            <ModelAvatar model={model} size={20} />
+          </View>
+        )}
         <Pressable
           onLongPress={onLongPress}
           delayLongPress={350}
@@ -331,7 +331,7 @@ function TypingDots({ color }: { color: string }) {
 const styles = StyleSheet.create({
   row: {
     marginVertical: 6,
-    paddingHorizontal: 8,
+    paddingHorizontal: 4,
     flexDirection: "row",
     alignItems: "flex-start",
   },
@@ -341,9 +341,12 @@ const styles = StyleSheet.create({
   rowRight: {
     justifyContent: "flex-end",
   },
-  avatarSlot: {
-    marginRight: 8,
-    marginTop: 2,
+  // Assistant avatar lives ABOVE the text as a small header chip
+  // (ChatGPT mobile style), so the text below can wrap edge-to-edge
+  // instead of being pushed inward by a side-aligned avatar slot.
+  assistantHeader: {
+    marginBottom: 4,
+    marginLeft: 2,
   },
   userCol: {
     maxWidth: "82%",
@@ -352,11 +355,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   // Assistant: no bubble background, just text on the page so the
-  // line wraps to the full visible width like ChatGPT mobile. Inline
-  // padding only — no rounded card, no surface tint.
+  // line wraps to the full visible width like ChatGPT mobile.
   assistantBubble: {
-    paddingVertical: 4,
-    paddingRight: 4,
+    paddingVertical: 2,
   },
   userBubble: {
     paddingHorizontal: 14,

@@ -91,6 +91,12 @@ export default function ChatScreen() {
   // navigation away / new send so we don't leak the SSE pipe (and don't
   // setState on an unmounted screen).
   const activeAbortRef = useRef<AbortController | null>(null);
+  // RAF-batch incoming SSE deltas. Without this, fast models emit a
+  // setState per character (hundreds/sec) → FlatList re-renders the
+  // streaming row hundreds of times per second → visible jank on lower-
+  // end Android. Accumulate per-assistant-id and flush once per frame.
+  const pendingDeltasRef = useRef<Map<string, string>>(new Map());
+  const flushFrameRef = useRef<number | null>(null);
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
@@ -105,8 +111,63 @@ export default function ChatScreen() {
     return () => {
       activeAbortRef.current?.abort();
       activeAbortRef.current = null;
+      if (flushFrameRef.current != null) {
+        cancelAnimationFrame(flushFrameRef.current);
+        flushFrameRef.current = null;
+      }
+      pendingDeltasRef.current.clear();
     };
   }, []);
+
+  // Drain pendingDeltasRef into the appropriate state slice. Called
+  // from the RAF callback and directly from onDone/onError so the last
+  // tail of a fast stream isn't deferred a frame past completion.
+  const flushDeltas = useCallback(() => {
+    const pending = pendingDeltasRef.current;
+    if (pending.size === 0) return;
+    if (mode === "compare") {
+      setColumns((prev) =>
+        prev.map((c) => ({
+          ...c,
+          messages: c.messages.map((m) => {
+            const add = pending.get(m.id);
+            return add ? { ...m, content: m.content + add } : m;
+          }),
+        })),
+      );
+    } else {
+      setMessages((prev) =>
+        prev.map((m) => {
+          const add = pending.get(m.id);
+          return add ? { ...m, content: m.content + add } : m;
+        }),
+      );
+    }
+    pending.clear();
+  }, [mode]);
+
+  // Schedule a single flush per animation frame. Multiple chunks
+  // arriving in the same frame coalesce into one setState — bounding
+  // work to ~60 fps regardless of the model's token rate.
+  const scheduleFlush = useCallback(() => {
+    if (flushFrameRef.current != null) return;
+    flushFrameRef.current = requestAnimationFrame(() => {
+      flushFrameRef.current = null;
+      flushDeltas();
+    });
+  }, [flushDeltas]);
+
+  // Cancel any in-flight RAF and synchronously drain. Used on
+  // stream-done / stream-error so the assistant row is fully written
+  // before we toggle streaming=false (otherwise the trailing chunk
+  // would render one frame after the cursor disappears).
+  const flushDeltasNow = useCallback(() => {
+    if (flushFrameRef.current != null) {
+      cancelAnimationFrame(flushFrameRef.current);
+      flushFrameRef.current = null;
+    }
+    flushDeltas();
+  }, [flushDeltas]);
 
   const loadMessages = useCallback(async () => {
     try {
@@ -346,22 +407,15 @@ export default function ChatScreen() {
             skipUserInsert: true,
             historyForModel: col.model.id,
             signal: abort.signal,
-            onChunk: (delta) =>
-              setColumns((prev) =>
-                prev.map((c) =>
-                  c.model.id === col.model.id
-                    ? {
-                        ...c,
-                        messages: c.messages.map((m) =>
-                          m.id === assistantId
-                            ? { ...m, content: m.content + delta }
-                            : m,
-                        ),
-                      }
-                    : c,
-                ),
-              ),
-            onDone: () =>
+            onChunk: (delta) => {
+              pendingDeltasRef.current.set(
+                assistantId,
+                (pendingDeltasRef.current.get(assistantId) ?? "") + delta,
+              );
+              scheduleFlush();
+            },
+            onDone: () => {
+              flushDeltasNow();
               setColumns((prev) =>
                 prev.map((c) =>
                   c.model.id === col.model.id
@@ -374,8 +428,10 @@ export default function ChatScreen() {
                       }
                     : c,
                 ),
-              ),
-            onError: (msg) =>
+              );
+            },
+            onError: (msg) => {
+              pendingDeltasRef.current.delete(assistantId);
               setColumns((prev) =>
                 prev.map((c) =>
                   c.model.id === col.model.id
@@ -390,7 +446,8 @@ export default function ChatScreen() {
                       }
                     : c,
                 ),
-              ),
+              );
+            },
           }),
         ),
       );
@@ -427,26 +484,31 @@ export default function ChatScreen() {
       skipUserInsert: false,
       historyForModel: null,
       signal: abort.signal,
-      onChunk: (delta) =>
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: m.content + delta } : m,
-          ),
-        ),
-      onDone: () =>
+      onChunk: (delta) => {
+        pendingDeltasRef.current.set(
+          assistantId,
+          (pendingDeltasRef.current.get(assistantId) ?? "") + delta,
+        );
+        scheduleFlush();
+      },
+      onDone: () => {
+        flushDeltasNow();
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId ? { ...m, streaming: false } : m,
           ),
-        ),
-      onError: (msg) =>
+        );
+      },
+      onError: (msg) => {
+        pendingDeltasRef.current.delete(assistantId);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
               ? { ...m, content: msg, streaming: false }
               : m,
           ),
-        ),
+        );
+      },
     });
     setIsStreaming(false);
     sendingRef.current = false;
@@ -819,7 +881,7 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_600SemiBold",
     fontSize: 13,
   },
-  listContent: { paddingVertical: 12, paddingHorizontal: 6 },
+  listContent: { paddingVertical: 12, paddingHorizontal: 0 },
   inputArea: {
     borderTopWidth: 0.5,
     paddingTop: 10,

@@ -113,7 +113,7 @@ export function isKnownModel(id: string | null | undefined): boolean {
 }
 
 export interface QuickAction {
-  id: "chat" | "youtube";
+  id: "youtube";
   name: string;
   icon: string;
   color: string;
@@ -121,13 +121,6 @@ export interface QuickAction {
 }
 
 export const QUICK_ACTIONS: QuickAction[] = [
-  {
-    id: "chat",
-    name: "Chat",
-    icon: "chatbubbles",
-    color: "#6C63FF",
-    systemPrompt: "",
-  },
   {
     id: "youtube",
     name: "YouTube Summary",

@@ -28,7 +28,7 @@ function ActionCard({
       onPress={onPress}
     >
       <View style={[styles.iconCircle, { backgroundColor: action.color + "26" }]}>
-        <Ionicons name={action.icon as any} size={26} color={action.color} />
+        <Ionicons name={action.icon as any} size={20} color={action.color} />
       </View>
       <Text style={[styles.label, { color: colors.foreground }]}>
         {action.name}
@@ -58,7 +58,7 @@ const styles = StyleSheet.create({
   container: {
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingTop: 16,
+    paddingTop: 14,
     paddingHorizontal: 16,
     paddingBottom: 12,
   },
@@ -68,20 +68,23 @@ const styles = StyleSheet.create({
   },
   card: {
     flex: 1,
+    flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 18,
-    borderRadius: 18,
-    gap: 10,
+    justifyContent: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    gap: 12,
   },
   iconCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
   },
   label: {
     fontFamily: "Inter_600SemiBold",
-    fontSize: 14,
+    fontSize: 15,
   },
 });

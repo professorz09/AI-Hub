@@ -8,7 +8,7 @@ interface Props {
   size?: number;
 }
 
-export function ModelAvatar({ model, size = 52 }: Props) {
+function ModelAvatarImpl({ model, size = 52 }: Props) {
   const [failed, setFailed] = useState(false);
   const initials = model.name.slice(0, 1).toUpperCase();
   const fontSize = size * 0.4;
@@ -42,6 +42,15 @@ export function ModelAvatar({ model, size = 52 }: Props) {
     </View>
   );
 }
+
+// Memoised so list rows / chrome (header avatar, picker rows, message
+// bubbles) don't re-render when the parent re-renders for an unrelated
+// state change. Equality on model identity + size is enough — the
+// component reads no other props.
+export const ModelAvatar = React.memo(
+  ModelAvatarImpl,
+  (prev, next) => prev.model === next.model && prev.size === next.size,
+);
 
 const styles = StyleSheet.create({
   avatar: {

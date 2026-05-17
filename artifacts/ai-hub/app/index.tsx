@@ -165,13 +165,6 @@ export default function HomeScreen() {
       setYoutubeUrl("");
       setYoutubeError(null);
       setYoutubeVisible(true);
-      return;
-    }
-    if (action.id === "chat") {
-      // Bring focus to the message input — previously this was a no-op
-      // (just a haptic) which made the button feel broken.
-      inputRef.current?.focus();
-      return;
     }
   }
 
