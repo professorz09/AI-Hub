@@ -24,6 +24,12 @@ interface ReqBody {
   content: string;
   systemPrompt?: string;
   model?: string;
+  // When true, the user message is assumed to be already persisted by the
+  // client (used by compare mode where one user turn fans out to N models).
+  skipUserInsert?: boolean;
+  // Only fetch and feed history for this model's column when in compare mode.
+  // null/undefined → include all user + assistant messages.
+  historyForModel?: string | null;
 }
 
 function sse(obj: unknown): Uint8Array {
@@ -48,7 +54,14 @@ Deno.serve(async (req) => {
     });
   }
 
-  const { conversationId, content, systemPrompt, model } = body;
+  const {
+    conversationId,
+    content,
+    systemPrompt,
+    model,
+    skipUserInsert,
+    historyForModel,
+  } = body;
   if (!conversationId || !content?.trim()) {
     return new Response(
       JSON.stringify({ error: "conversationId and content are required" }),
@@ -90,24 +103,30 @@ Deno.serve(async (req) => {
     });
   }
 
-  const { error: insertUserErr } = await supabase
-    .from("messages")
-    .insert({ conversation_id: conversationId, role: "user", content });
-  if (insertUserErr) {
-    return new Response(
-      JSON.stringify({ error: "Failed to save user message" }),
-      {
-        status: 500,
-        headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-      },
-    );
+  if (!skipUserInsert) {
+    const { error: insertUserErr } = await supabase
+      .from("messages")
+      .insert({ conversation_id: conversationId, role: "user", content });
+    if (insertUserErr) {
+      return new Response(
+        JSON.stringify({ error: "Failed to save user message" }),
+        {
+          status: 500,
+          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+        },
+      );
+    }
   }
 
-  const { data: history, error: histErr } = await supabase
+  // In compare mode each model only sees its own column: user turns + this
+  // model's prior assistant turns. Otherwise feed the full transcript.
+  let historyQuery = supabase
     .from("messages")
-    .select("role, content")
+    .select("role, content, model")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
+
+  const { data: history, error: histErr } = await historyQuery;
   if (histErr || !history) {
     return new Response(
       JSON.stringify({ error: "Failed to load history" }),
@@ -124,10 +143,16 @@ Deno.serve(async (req) => {
     messages.push({ role: "system", content: systemPrompt });
   }
   for (const m of history) {
-    messages.push({
-      role: m.role as "user" | "assistant",
-      content: m.content,
-    });
+    const role = m.role as "user" | "assistant";
+    // Filter assistant turns to this model's column when in compare mode.
+    if (
+      role === "assistant" &&
+      historyForModel != null &&
+      m.model !== historyForModel
+    ) {
+      continue;
+    }
+    messages.push({ role, content: m.content });
   }
 
   const openrouterResp = await fetch(
@@ -196,6 +221,7 @@ Deno.serve(async (req) => {
             conversation_id: conversationId,
             role: "assistant",
             content: full,
+            model: model?.trim() || conv.model,
           });
         }
         controller.enqueue(sse({ done: true }));

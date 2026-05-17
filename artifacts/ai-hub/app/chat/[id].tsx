@@ -28,6 +28,15 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   streaming?: boolean;
+  model?: string;
+}
+
+type ChatMode = "single" | "compare";
+
+interface Column {
+  model: AIModel;
+  messages: Message[];
+  streaming: boolean;
 }
 
 export default function ChatScreen() {
@@ -38,15 +47,36 @@ export default function ChatScreen() {
     initialMessage?: string;
     modelId?: string;
     systemPrompt?: string;
+    mode?: string;
+    models?: string;
   }>();
 
   const conversationId = params.id;
+  const mode: ChatMode = params.mode === "compare" ? "compare" : "single";
+  const compareModelIds = (params.models ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  // Single-mode state
   const [model, setModel] = useState<AIModel>(
-    getModelById(params.modelId ?? "")
+    getModelById(params.modelId ?? ""),
   );
   const [messages, setMessages] = useState<Message[]>([]);
-  const [inputText, setInputText] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+
+  // Compare-mode state: one column per selected model
+  const [columns, setColumns] = useState<Column[]>(() =>
+    mode === "compare"
+      ? compareModelIds.map((id) => ({
+          model: getModelById(id),
+          messages: [],
+          streaming: false,
+        }))
+      : [],
+  );
+
+  const [inputText, setInputText] = useState("");
   const [pickerVisible, setPickerVisible] = useState(false);
   const [attachVisible, setAttachVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -56,28 +86,57 @@ export default function ChatScreen() {
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
+  const anyStreaming = isStreaming || columns.some((c) => c.streaming);
+
   const loadMessages = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("messages")
-        .select("id, role, content")
+        .select("id, role, content, model")
         .eq("conversation_id", Number(conversationId))
         .in("role", ["user", "assistant"])
         .order("created_at", { ascending: true });
       if (error) throw error;
-      setMessages(
-        (data ?? []).map((m) => ({
-          id: String(m.id),
-          role: m.role as "user" | "assistant",
-          content: m.content,
-        })),
-      );
+
+      const rows = (data ?? []) as {
+        id: number;
+        role: "user" | "assistant";
+        content: string;
+        model: string | null;
+      }[];
+
+      if (mode === "compare") {
+        setColumns((prev) =>
+          prev.map((col) => ({
+            ...col,
+            messages: rows
+              .filter(
+                (r) => r.role === "user" || r.model === col.model.id,
+              )
+              .map((r) => ({
+                id: String(r.id),
+                role: r.role,
+                content: r.content,
+                model: r.model ?? undefined,
+              })),
+          })),
+        );
+      } else {
+        setMessages(
+          rows.map((r) => ({
+            id: String(r.id),
+            role: r.role,
+            content: r.content,
+            model: r.model ?? undefined,
+          })),
+        );
+      }
     } catch (e) {
       console.error(e);
     } finally {
       setIsLoading(false);
     }
-  }, [conversationId]);
+  }, [conversationId, mode]);
 
   useEffect(() => {
     loadMessages();
@@ -88,28 +147,19 @@ export default function ChatScreen() {
       hasSentInitial.current = true;
       sendMessage(params.initialMessage);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading]);
 
-  async function sendMessage(text: string) {
-    if (!text.trim() || isStreaming) return;
-    const userMsg: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: text,
-    };
-    const assistantId = (Date.now() + 1).toString();
-    const assistantMsg: Message = {
-      id: assistantId,
-      role: "assistant",
-      content: "",
-      streaming: true,
-    };
-
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
-    setInputText("");
-    setIsStreaming(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
+  async function streamOne(args: {
+    text: string;
+    modelId: string;
+    assistantId: string;
+    skipUserInsert: boolean;
+    historyForModel: string | null;
+    onChunk: (delta: string) => void;
+    onDone: () => void;
+    onError: (msg: string) => void;
+  }) {
     try {
       const resp = await fetch(chatFunctionUrl, {
         method: "POST",
@@ -120,18 +170,18 @@ export default function ChatScreen() {
         },
         body: JSON.stringify({
           conversationId: Number(conversationId),
-          content: text,
+          content: args.text,
           systemPrompt: params.systemPrompt ?? "",
-          model: model.id,
+          model: args.modelId,
+          skipUserInsert: args.skipUserInsert,
+          historyForModel: args.historyForModel,
         }),
       });
-
       if (!resp.ok || !resp.body) throw new Error("Stream failed");
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -143,63 +193,275 @@ export default function ChatScreen() {
           const data = line.slice(6).trim();
           if (!data) continue;
           try {
-            const parsed = JSON.parse(data) as { content?: string; done?: boolean; error?: string };
-            if (parsed.error) break;
-            if (parsed.done) break;
-            if (parsed.content) {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantId
-                    ? { ...m, content: m.content + parsed.content }
-                    : m
-                )
-              );
+            const parsed = JSON.parse(data) as {
+              content?: string;
+              done?: boolean;
+              error?: string;
+            };
+            if (parsed.error) {
+              args.onError(parsed.error);
+              return;
             }
-          } catch {}
+            if (parsed.done) {
+              args.onDone();
+              return;
+            }
+            if (parsed.content) args.onChunk(parsed.content);
+          } catch {
+            // ignore
+          }
         }
       }
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId ? { ...m, streaming: false } : m
-        )
-      );
+      args.onDone();
     } catch (e) {
-      console.error(e);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, content: "Something went wrong. Please try again.", streaming: false }
-            : m
-        )
+      args.onError(
+        e instanceof Error ? e.message : "Something went wrong. Try again.",
       );
-    } finally {
-      setIsStreaming(false);
-      inputRef.current?.focus();
     }
   }
 
-  const reversedMessages = [...messages].reverse();
+  async function sendMessage(text: string) {
+    if (!text.trim() || anyStreaming) return;
+    setInputText("");
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    if (mode === "compare") {
+      const userMsg: Message = {
+        id: `u-${Date.now()}`,
+        role: "user",
+        content: text,
+      };
+
+      // Persist the shared user turn once. Edge Function calls will skip insert.
+      const { error: insertErr } = await supabase
+        .from("messages")
+        .insert({
+          conversation_id: Number(conversationId),
+          role: "user",
+          content: text,
+        });
+      if (insertErr) {
+        console.error(insertErr);
+        return;
+      }
+
+      const placeholders = columns.map((col) => ({
+        col,
+        assistantId: `a-${col.model.id}-${Date.now()}`,
+      }));
+
+      setColumns((prev) =>
+        prev.map((col, i) => ({
+          ...col,
+          streaming: true,
+          messages: [
+            ...col.messages,
+            userMsg,
+            {
+              id: placeholders[i]!.assistantId,
+              role: "assistant",
+              content: "",
+              streaming: true,
+              model: col.model.id,
+            },
+          ],
+        })),
+      );
+
+      await Promise.all(
+        placeholders.map(({ col, assistantId }) =>
+          streamOne({
+            text,
+            modelId: col.model.id,
+            assistantId,
+            skipUserInsert: true,
+            historyForModel: col.model.id,
+            onChunk: (delta) =>
+              setColumns((prev) =>
+                prev.map((c) =>
+                  c.model.id === col.model.id
+                    ? {
+                        ...c,
+                        messages: c.messages.map((m) =>
+                          m.id === assistantId
+                            ? { ...m, content: m.content + delta }
+                            : m,
+                        ),
+                      }
+                    : c,
+                ),
+              ),
+            onDone: () =>
+              setColumns((prev) =>
+                prev.map((c) =>
+                  c.model.id === col.model.id
+                    ? {
+                        ...c,
+                        streaming: false,
+                        messages: c.messages.map((m) =>
+                          m.id === assistantId ? { ...m, streaming: false } : m,
+                        ),
+                      }
+                    : c,
+                ),
+              ),
+            onError: (msg) =>
+              setColumns((prev) =>
+                prev.map((c) =>
+                  c.model.id === col.model.id
+                    ? {
+                        ...c,
+                        streaming: false,
+                        messages: c.messages.map((m) =>
+                          m.id === assistantId
+                            ? { ...m, content: msg, streaming: false }
+                            : m,
+                        ),
+                      }
+                    : c,
+                ),
+              ),
+          }),
+        ),
+      );
+      inputRef.current?.focus();
+      return;
+    }
+
+    // Single mode
+    const userMsg: Message = {
+      id: `u-${Date.now()}`,
+      role: "user",
+      content: text,
+    };
+    const assistantId = `a-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      userMsg,
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        streaming: true,
+        model: model.id,
+      },
+    ]);
+    setIsStreaming(true);
+
+    await streamOne({
+      text,
+      modelId: model.id,
+      assistantId,
+      skipUserInsert: false,
+      historyForModel: null,
+      onChunk: (delta) =>
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: m.content + delta } : m,
+          ),
+        ),
+      onDone: () =>
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, streaming: false } : m,
+          ),
+        ),
+      onError: (msg) =>
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: msg, streaming: false }
+              : m,
+          ),
+        ),
+    });
+    setIsStreaming(false);
+    inputRef.current?.focus();
+  }
+
+  function renderTranscript(list: Message[]) {
+    if (list.length === 0) return null;
+    return (
+      <FlatList
+        data={[...list].reverse()}
+        inverted
+        keyExtractor={(m) => m.id}
+        renderItem={({ item }) => (
+          <MessageBubble
+            role={item.role}
+            content={item.content}
+            streaming={!!item.streaming}
+          />
+        )}
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.listContent}
+      />
+    );
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={[styles.header, { paddingTop: topInset + 8, borderBottomColor: colors.border }]}>
+      <View
+        style={[
+          styles.header,
+          { paddingTop: topInset + 8, borderBottomColor: colors.border },
+        ]}
+      >
         <Pressable onPress={() => router.back()} hitSlop={8}>
           <Ionicons name="menu" size={26} color={colors.foreground} />
         </Pressable>
-        <Pressable
-          style={styles.modelBtn}
-          onPress={() => setPickerVisible(true)}
-          hitSlop={4}
-        >
-          <ModelAvatar model={model} size={28} />
-          <Text style={[styles.modelName, { color: colors.foreground }]}>
-            {model.name}{" "}
-            <Text style={{ color: colors.mutedForeground, fontFamily: "Inter_400Regular" }}>
-              {model.version}
+
+        {mode === "compare" ? (
+          <View style={styles.compareHeader}>
+            {columns.map((c, i) => (
+              <View key={c.model.id} style={styles.compareHeaderItem}>
+                <ModelAvatar model={c.model} size={24} />
+                <Text
+                  style={[styles.compareHeaderName, { color: colors.foreground }]}
+                  numberOfLines={1}
+                >
+                  {c.model.name}
+                </Text>
+                {i === 0 && (
+                  <Text
+                    style={[
+                      styles.compareHeaderVs,
+                      { color: colors.mutedForeground },
+                    ]}
+                  >
+                    vs
+                  </Text>
+                )}
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Pressable
+            style={styles.modelBtn}
+            onPress={() => setPickerVisible(true)}
+            hitSlop={4}
+          >
+            <ModelAvatar model={model} size={28} />
+            <Text style={[styles.modelName, { color: colors.foreground }]}>
+              {model.name}{" "}
+              <Text
+                style={{
+                  color: colors.mutedForeground,
+                  fontFamily: "Inter_400Regular",
+                }}
+              >
+                {model.version}
+              </Text>
             </Text>
-          </Text>
-          <Ionicons name="chevron-down" size={14} color={colors.mutedForeground} />
-        </Pressable>
+            <Ionicons
+              name="chevron-down"
+              size={14}
+              color={colors.mutedForeground}
+            />
+          </Pressable>
+        )}
+
         <Pressable onPress={() => router.push("/")} hitSlop={8}>
           <Ionicons name="home-outline" size={22} color={colors.mutedForeground} />
         </Pressable>
@@ -214,6 +476,37 @@ export default function ChatScreen() {
           <View style={styles.loadingCenter}>
             <ActivityIndicator color={colors.primary} size="large" />
           </View>
+        ) : mode === "compare" ? (
+          <View style={styles.compareWrap}>
+            {columns.map((c, idx) => (
+              <View
+                key={c.model.id}
+                style={[
+                  styles.compareCol,
+                  idx > 0 && {
+                    borderLeftWidth: StyleSheet.hairlineWidth,
+                    borderLeftColor: colors.border,
+                  },
+                ]}
+              >
+                {c.messages.length === 0 ? (
+                  <View style={styles.colEmpty}>
+                    <ModelAvatar model={c.model} size={44} />
+                    <Text
+                      style={[
+                        styles.colEmptyTitle,
+                        { color: colors.foreground },
+                      ]}
+                    >
+                      {c.model.name}
+                    </Text>
+                  </View>
+                ) : (
+                  renderTranscript(c.messages)
+                )}
+              </View>
+            ))}
+          </View>
         ) : messages.length === 0 ? (
           <View style={styles.emptyCenter}>
             <ModelAvatar model={model} size={64} />
@@ -225,21 +518,7 @@ export default function ChatScreen() {
             </Text>
           </View>
         ) : (
-          <FlatList
-            data={reversedMessages}
-            inverted
-            keyExtractor={(m) => m.id}
-            renderItem={({ item }) => (
-              <MessageBubble
-                role={item.role}
-                content={item.content}
-                streaming={!!item.streaming}
-              />
-            )}
-            keyboardDismissMode="interactive"
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={styles.listContent}
-          />
+          renderTranscript(messages)
         )}
 
         <View
@@ -253,56 +532,58 @@ export default function ChatScreen() {
           ]}
         >
           <View style={[styles.inputRow, { backgroundColor: colors.input }]}>
-            <Pressable
-              hitSlop={8}
-              onPress={() => setAttachVisible(true)}
-            >
-              <Ionicons name="add-circle" size={26} color={colors.mutedForeground} />
+            <Pressable hitSlop={8} onPress={() => setAttachVisible(true)}>
+              <Ionicons
+                name="add-circle"
+                size={26}
+                color={colors.mutedForeground}
+              />
             </Pressable>
             <TextInput
               ref={inputRef}
               style={[styles.textInput, { color: colors.foreground }]}
-              placeholder="Write your message..."
+              placeholder={
+                mode === "compare"
+                  ? "Ask both models..."
+                  : "Write your message..."
+              }
               placeholderTextColor={colors.mutedForeground}
               value={inputText}
               onChangeText={setInputText}
               multiline
               returnKeyType="default"
             />
-            <Pressable hitSlop={8}>
-              <Ionicons name="mic-outline" size={22} color={colors.mutedForeground} />
-            </Pressable>
             <Pressable
               style={[
                 styles.sendBtn,
                 {
                   backgroundColor:
-                    inputText.trim() && !isStreaming
+                    inputText.trim() && !anyStreaming
                       ? colors.primary
                       : colors.accent,
                 },
               ]}
               onPress={() => sendMessage(inputText)}
-              disabled={!inputText.trim() || isStreaming}
+              disabled={!inputText.trim() || anyStreaming}
             >
-              <Ionicons name="arrow-up" size={18} color={colors.primaryForeground} />
-            </Pressable>
-          </View>
-          <View style={styles.actionsRow}>
-            <Pressable style={[styles.searchBtn, { backgroundColor: colors.primary + "33" }]}>
-              <Ionicons name="globe-outline" size={15} color={colors.primary} />
-              <Text style={[styles.searchText, { color: colors.primary }]}>Search</Text>
+              <Ionicons
+                name="arrow-up"
+                size={18}
+                color={colors.primaryForeground}
+              />
             </Pressable>
           </View>
         </View>
       </KeyboardAvoidingView>
 
-      <ModelPicker
-        visible={pickerVisible}
-        selectedId={model.id}
-        onSelect={setModel}
-        onClose={() => setPickerVisible(false)}
-      />
+      {mode === "single" && (
+        <ModelPicker
+          visible={pickerVisible}
+          selectedId={model.id}
+          onSelect={setModel}
+          onClose={() => setPickerVisible(false)}
+        />
+      )}
 
       <Modal
         visible={attachVisible}
@@ -310,8 +591,16 @@ export default function ChatScreen() {
         animationType="slide"
         onRequestClose={() => setAttachVisible(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setAttachVisible(false)} />
-        <View style={[styles.attachSheet, { backgroundColor: colors.card, paddingBottom: bottomInset + 16 }]}>
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setAttachVisible(false)}
+        />
+        <View
+          style={[
+            styles.attachSheet,
+            { backgroundColor: colors.card, paddingBottom: bottomInset + 16 },
+          ]}
+        >
           {[
             { icon: "camera-outline", label: "Camera" },
             { icon: "image-outline", label: "Photos" },
@@ -322,7 +611,11 @@ export default function ChatScreen() {
               style={[styles.attachRow, { backgroundColor: colors.secondary }]}
               onPress={() => setAttachVisible(false)}
             >
-              <Ionicons name={item.icon as any} size={22} color={colors.foreground} />
+              <Ionicons
+                name={item.icon as any}
+                size={22}
+                color={colors.foreground}
+              />
               <Text style={[styles.attachLabel, { color: colors.foreground }]}>
                 {item.label}
               </Text>
@@ -355,6 +648,28 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_600SemiBold",
     fontSize: 16,
   },
+  compareHeader: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  compareHeaderItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  compareHeaderName: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 13,
+    maxWidth: 80,
+  },
+  compareHeaderVs: {
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
+    marginHorizontal: 4,
+  },
   loadingCenter: { flex: 1, alignItems: "center", justifyContent: "center" },
   emptyCenter: {
     flex: 1,
@@ -373,7 +688,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: "center",
   },
-  listContent: { paddingVertical: 12 },
+  compareWrap: {
+    flex: 1,
+    flexDirection: "row",
+  },
+  compareCol: {
+    flex: 1,
+  },
+  colEmpty: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    padding: 16,
+  },
+  colEmptyTitle: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 13,
+  },
+  listContent: { paddingVertical: 12, paddingHorizontal: 6 },
   inputArea: {
     borderTopWidth: 0.5,
     paddingTop: 10,
@@ -402,25 +735,6 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     alignItems: "center",
     justifyContent: "center",
-  },
-  actionsRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 4,
-    paddingBottom: 4,
-    gap: 8,
-  },
-  searchBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    gap: 5,
-  },
-  searchText: {
-    fontFamily: "Inter_500Medium",
-    fontSize: 13,
   },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)" },
   attachSheet: {

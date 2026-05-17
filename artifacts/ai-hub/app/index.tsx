@@ -32,10 +32,14 @@ export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const [selectedModel, setSelectedModel] = useState<AIModel>(DEFAULT_MODEL);
+  const [compareModels, setCompareModels] = useState<AIModel[]>([]);
+  const [compareMode, setCompareMode] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
   const [inputText, setInputText] = useState("");
   const [youtubeVisible, setYoutubeVisible] = useState(false);
   const [youtubeUrl, setYoutubeUrl] = useState("");
+
+  const compareReady = compareMode && compareModels.length === 2;
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
@@ -46,13 +50,22 @@ export default function HomeScreen() {
     systemPrompt: string;
     category: string;
   }) {
+    if (compareMode && compareModels.length !== 2) {
+      Alert.alert("Pick 2 models", "Compare mode needs exactly two models.");
+      return;
+    }
+    const useCompare = compareMode && compareModels.length === 2;
+    const primary = useCompare ? compareModels[0]! : selectedModel;
+
     try {
       const { data, error } = await supabase
         .from("conversations")
         .insert({
           title: args.title.slice(0, 60),
-          model: selectedModel.id,
+          model: primary.id,
           category: args.category,
+          mode: useCompare ? "compare" : "single",
+          models: useCompare ? compareModels.map((m) => m.id) : null,
         })
         .select("id")
         .single();
@@ -63,8 +76,10 @@ export default function HomeScreen() {
         params: {
           id: String(data.id),
           initialMessage: args.initialMessage,
-          modelId: selectedModel.id,
+          modelId: primary.id,
           systemPrompt: args.systemPrompt,
+          mode: useCompare ? "compare" : "single",
+          models: useCompare ? compareModels.map((m) => m.id).join(",") : "",
         },
       });
     } catch (e) {
@@ -75,11 +90,37 @@ export default function HomeScreen() {
 
   function handleSend(text: string) {
     if (!text.trim()) return;
+    if (compareMode && compareModels.length !== 2) {
+      Alert.alert("Pick 2 models", "Compare mode needs exactly two models.");
+      setPickerVisible(true);
+      return;
+    }
     startConversation({
       title: text,
       initialMessage: text,
       systemPrompt: "",
       category: "chat",
+    });
+  }
+
+  function toggleCompareModel(m: AIModel) {
+    setCompareModels((prev) => {
+      const exists = prev.find((p) => p.id === m.id);
+      if (exists) return prev.filter((p) => p.id !== m.id);
+      if (prev.length >= 2) return prev;
+      return [...prev, m];
+    });
+  }
+
+  function toggleCompareMode() {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setCompareMode((prev) => {
+      const next = !prev;
+      if (next && compareModels.length === 0) {
+        setCompareModels([selectedModel]);
+        setPickerVisible(true);
+      }
+      return next;
     });
   }
 
@@ -119,8 +160,33 @@ export default function HomeScreen() {
           <Ionicons name="menu" size={26} color={colors.foreground} />
         </Pressable>
         <Text style={[styles.brand, { color: colors.foreground }]}>AI Hub</Text>
-        <Pressable hitSlop={8} onPress={() => router.push("/history")}>
-          <Ionicons name="time-outline" size={22} color={colors.mutedForeground} />
+        <Pressable
+          hitSlop={8}
+          onPress={toggleCompareMode}
+          style={[
+            styles.compareBtn,
+            {
+              backgroundColor: compareMode ? colors.primary : colors.secondary,
+            },
+          ]}
+        >
+          <Ionicons
+            name="git-compare-outline"
+            size={14}
+            color={compareMode ? colors.primaryForeground : colors.mutedForeground}
+          />
+          <Text
+            style={[
+              styles.compareBtnText,
+              {
+                color: compareMode
+                  ? colors.primaryForeground
+                  : colors.mutedForeground,
+              },
+            ]}
+          >
+            Compare
+          </Text>
         </Pressable>
       </View>
 
@@ -132,7 +198,24 @@ export default function HomeScreen() {
           }}
           style={styles.avatarWrap}
         >
-          <ModelAvatar model={selectedModel} size={88} />
+          {compareMode ? (
+            <View style={styles.compareAvatars}>
+              <View style={{ marginRight: -16, zIndex: 2 }}>
+                <ModelAvatar
+                  model={compareModels[0] ?? selectedModel}
+                  size={76}
+                />
+              </View>
+              <View style={{ opacity: compareModels[1] ? 1 : 0.45 }}>
+                <ModelAvatar
+                  model={compareModels[1] ?? selectedModel}
+                  size={76}
+                />
+              </View>
+            </View>
+          ) : (
+            <ModelAvatar model={selectedModel} size={88} />
+          )}
           <View
             style={[
               styles.chevron,
@@ -143,16 +226,28 @@ export default function HomeScreen() {
           </View>
         </Pressable>
 
-        <Text style={[styles.greeting, { color: colors.foreground }]}>
-          Hi, I&apos;m{" "}
-          <Text style={{ color: colors.foreground }}>{selectedModel.name}</Text>
-          {"  "}
-          <Text style={[styles.version, { color: colors.mutedForeground }]}>
-            {selectedModel.version}
+        {compareMode ? (
+          <Text style={[styles.greeting, { color: colors.foreground }]}>
+            {compareReady
+              ? `${compareModels[0]!.name} vs ${compareModels[1]!.name}`
+              : "Pick 2 models to compare"}
           </Text>
-        </Text>
+        ) : (
+          <Text style={[styles.greeting, { color: colors.foreground }]}>
+            Hi, I&apos;m{" "}
+            <Text style={{ color: colors.foreground }}>
+              {selectedModel.name}
+            </Text>
+            {"  "}
+            <Text style={[styles.version, { color: colors.mutedForeground }]}>
+              {selectedModel.version}
+            </Text>
+          </Text>
+        )}
         <Text style={[styles.sub, { color: colors.mutedForeground }]}>
-          How can I help you today?
+          {compareMode
+            ? "Same prompt, two models, side by side."
+            : "How can I help you today?"}
         </Text>
 
         <View style={[styles.inputBar, { backgroundColor: colors.input }]}>
@@ -188,7 +283,10 @@ export default function HomeScreen() {
       <ModelPicker
         visible={pickerVisible}
         selectedId={selectedModel.id}
+        multi={compareMode}
+        selectedIds={compareModels.map((m) => m.id)}
         onSelect={setSelectedModel}
+        onToggle={toggleCompareModel}
         onClose={() => setPickerVisible(false)}
       />
 
@@ -294,6 +392,22 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_700Bold",
     fontSize: 17,
     letterSpacing: 0.3,
+  },
+  compareBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  compareBtnText: {
+    fontFamily: "Inter_600SemiBold",
+    fontSize: 12,
+  },
+  compareAvatars: {
+    flexDirection: "row",
+    alignItems: "center",
   },
   center: {
     flex: 1,
