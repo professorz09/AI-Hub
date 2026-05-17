@@ -17,16 +17,17 @@ import * as Haptics from "expo-haptics";
 import { useColors } from "@/hooks/useColors";
 import { ModelAvatar } from "@/components/ModelAvatar";
 import { getModelById } from "@/constants/models";
+import { supabase } from "@/lib/supabase";
 
 interface Conversation {
   id: number;
   title: string;
   model: string;
   category: string | null;
-  createdAt: string;
+  created_at: string;
 }
 
-const FILTER_CATEGORIES = ["All", "Chat", "Image", "Destiny", "Storyteller", "Homework", "Coding"];
+const FILTER_CATEGORIES = ["All", "Chat", "YouTube"];
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -42,7 +43,7 @@ function formatDate(iso: string): string {
 function groupByDate(convos: Conversation[]) {
   const groups = new Map<string, Conversation[]>();
   for (const c of convos) {
-    const label = formatDate(c.createdAt);
+    const label = formatDate(c.created_at);
     if (!groups.has(label)) groups.set(label, []);
     groups.get(label)!.push(c);
   }
@@ -59,22 +60,21 @@ export default function HistoryScreen() {
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
-  const baseUrl = `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
-
   const loadConversations = useCallback(async () => {
     try {
       setLoading(true);
-      const resp = await fetch(`${baseUrl}/api/openrouter/conversations`);
-      if (resp.ok) {
-        const data = await resp.json();
-        setConversations((data as Conversation[]).slice().reverse());
-      }
+      const { data, error } = await supabase
+        .from("conversations")
+        .select("id, title, model, category, created_at")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      setConversations((data ?? []) as Conversation[]);
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
-  }, [baseUrl]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -84,9 +84,11 @@ export default function HistoryScreen() {
 
   async function deleteConversation(id: number) {
     try {
-      await fetch(`${baseUrl}/api/openrouter/conversations/${id}`, {
-        method: "DELETE",
-      });
+      const { error } = await supabase
+        .from("conversations")
+        .delete()
+        .eq("id", id);
+      if (error) throw error;
       setConversations((prev) => prev.filter((c) => c.id !== id));
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
@@ -156,16 +158,10 @@ export default function HistoryScreen() {
             onPress={() => setFilter(cat)}
           >
             {cat === "Chat" && (
-              <Ionicons name="chatbubble-outline" size={14} color={colors.mutedForeground} style={{ marginRight: 4 }} />
+              <Ionicons name="chatbubbles-outline" size={14} color={colors.mutedForeground} style={{ marginRight: 4 }} />
             )}
-            {cat === "Image" && (
-              <Ionicons name="image-outline" size={14} color={colors.mutedForeground} style={{ marginRight: 4 }} />
-            )}
-            {cat === "Destiny" && (
-              <Ionicons name="sparkles-outline" size={14} color={colors.mutedForeground} style={{ marginRight: 4 }} />
-            )}
-            {cat === "Storyteller" && (
-              <Ionicons name="pencil-outline" size={14} color={colors.mutedForeground} style={{ marginRight: 4 }} />
+            {cat === "YouTube" && (
+              <Ionicons name="logo-youtube" size={14} color="#FF0000" style={{ marginRight: 4 }} />
             )}
             <Text style={[styles.chipText, { color: colors.mutedForeground }]}>
               {cat}
@@ -225,7 +221,7 @@ export default function HistoryScreen() {
                   <Text
                     style={[styles.rowDate, { color: colors.mutedForeground }]}
                   >
-                    {new Date(conv.createdAt).toLocaleString("en-US", {
+                    {new Date(conv.created_at).toLocaleString("en-US", {
                       year: "numeric",
                       month: "short",
                       day: "numeric",

@@ -5,68 +5,75 @@ export interface AIModel {
   description: string;
   color: string;
   textColor: string;
+  logoUrl: string;
   badge: "hot" | "think" | "think+hot" | null;
   section: "recent" | "more";
 }
 
 export const AI_MODELS: AIModel[] = [
   {
-    id: "anthropic/claude-opus-4.7-fast",
+    id: "anthropic/claude-3.5-sonnet",
     name: "Claude",
-    version: "4.7",
+    version: "3.5 Sonnet",
     description: "Thoughtful and intelligent conversation partner.",
     color: "#E8704A",
     textColor: "#FFFFFF",
+    logoUrl: "https://www.google.com/s2/favicons?domain=claude.ai&sz=128",
     badge: null,
     section: "recent",
   },
   {
-    id: "deepseek/deepseek-v4-flash",
+    id: "deepseek/deepseek-chat",
     name: "DeepSeek",
-    version: "V4-Flash",
+    version: "V3",
     description: "Very creative, great for writing stories.",
     color: "#4B6CB7",
     textColor: "#FFFFFF",
+    logoUrl: "https://www.google.com/s2/favicons?domain=deepseek.com&sz=128",
     badge: "hot",
     section: "recent",
   },
   {
-    id: "~openai/gpt-mini-latest",
+    id: "openai/gpt-4o-mini",
     name: "GPT",
-    version: "5-mini",
+    version: "4o-mini",
     description: "Smart, balanced, and great for study.",
     color: "#1A1A2E",
     textColor: "#FFFFFF",
+    logoUrl: "https://www.google.com/s2/favicons?domain=openai.com&sz=128",
     badge: null,
     section: "recent",
   },
   {
-    id: "qwen/qwen3.5-plus-20260420",
+    id: "qwen/qwen-2.5-72b-instruct",
     name: "Qwen",
-    version: "3.6 Plus",
+    version: "2.5 72B",
     description: "Technical expert built for writing code.",
     color: "#2D5BE3",
     textColor: "#FFFFFF",
+    logoUrl: "https://www.google.com/s2/favicons?domain=qwenlm.ai&sz=128",
     badge: "think",
     section: "more",
   },
   {
-    id: "google/gemini-3.1-flash-lite",
+    id: "google/gemini-2.0-flash-exp:free",
     name: "Gemini",
-    version: "2.5 Lite",
+    version: "2.0 Flash",
     description: "Good at understanding images and creativity.",
     color: "#1565C0",
     textColor: "#FFFFFF",
+    logoUrl: "https://www.google.com/s2/favicons?domain=gemini.google.com&sz=128",
     badge: null,
     section: "more",
   },
   {
-    id: "~google/gemini-pro-latest",
-    name: "Gemini",
-    version: "3.1 Pro",
-    description: "Extremely capable, great for complex tasks.",
+    id: "meta-llama/llama-3.3-70b-instruct",
+    name: "Llama",
+    version: "3.3 70B",
+    description: "Open-source powerhouse for complex tasks.",
     color: "#0D47A1",
     textColor: "#FFFFFF",
+    logoUrl: "https://www.google.com/s2/favicons?domain=llama.meta.com&sz=128",
     badge: "think+hot",
     section: "more",
   },
@@ -79,7 +86,7 @@ export function getModelById(id: string): AIModel {
 }
 
 export interface QuickAction {
-  id: string;
+  id: "chat" | "youtube";
   name: string;
   icon: string;
   color: string;
@@ -88,67 +95,18 @@ export interface QuickAction {
 
 export const QUICK_ACTIONS: QuickAction[] = [
   {
-    id: "image",
-    name: "Image",
-    icon: "image-outline",
-    color: "#4B6CB7",
-    systemPrompt:
-      "You are an image generation assistant. Help users create detailed, vivid image prompts for AI image generators. Provide descriptive, artistic guidance.",
+    id: "chat",
+    name: "Chat",
+    icon: "chatbubbles",
+    color: "#6C63FF",
+    systemPrompt: "",
   },
   {
-    id: "destiny",
-    name: "Destiny",
-    icon: "sparkles-outline",
-    color: "#9B59B6",
+    id: "youtube",
+    name: "YouTube Summary",
+    icon: "logo-youtube",
+    color: "#FF0000",
     systemPrompt:
-      "You are a mystical destiny reader. Give thoughtful, poetic readings about life paths and future possibilities in an engaging, mysterious style.",
-  },
-  {
-    id: "storyteller",
-    name: "Storyteller",
-    icon: "book-outline",
-    color: "#8B7EC8",
-    systemPrompt:
-      "You are a creative storyteller. Craft compelling narratives with rich characters and vivid worlds based on user prompts.",
-  },
-  {
-    id: "homework",
-    name: "Homework",
-    icon: "school-outline",
-    color: "#2196F3",
-    systemPrompt:
-      "You are a helpful tutor. Explain concepts clearly, help solve problems step by step, and encourage learning.",
-  },
-  {
-    id: "spy",
-    name: "Spy",
-    icon: "eye-outline",
-    color: "#607D8B",
-    systemPrompt:
-      "You are a secret agent assistant. Respond in a spy thriller style, helping with strategy, puzzles, and covert planning.",
-  },
-  {
-    id: "love",
-    name: "Love",
-    icon: "heart-outline",
-    color: "#E91E63",
-    systemPrompt:
-      "You are a compassionate relationship advisor. Give warm, thoughtful guidance on love, relationships, and emotional wellbeing.",
-  },
-  {
-    id: "calorie",
-    name: "Calorie",
-    icon: "flame-outline",
-    color: "#FF5722",
-    systemPrompt:
-      "You are a nutrition and fitness expert. Help users track calories, plan healthy meals, and maintain a balanced diet.",
-  },
-  {
-    id: "coding",
-    name: "Coding",
-    icon: "code-slash-outline",
-    color: "#4CAF50",
-    systemPrompt:
-      "You are an expert programmer. Help users write clean code, debug issues, explain concepts, and solve technical problems.",
+      "You are a YouTube video summarization assistant. The user will provide a YouTube video URL. Produce a clear, structured summary including: (1) the video's main topic, (2) 5-8 key points as bullets, (3) notable timestamps or chapters if inferable from context, and (4) a concise takeaway. If you cannot directly fetch the video transcript, base the summary on the title, channel, and any context the user provides, and clearly note your assumptions.",
   },
 ];
