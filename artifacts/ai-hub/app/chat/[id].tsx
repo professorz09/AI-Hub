@@ -116,7 +116,11 @@ export default function ChatScreen() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: text }),
+          body: JSON.stringify({
+            content: text,
+            systemPrompt: params.systemPrompt ?? "",
+            model: model.id,
+          }),
         }
       );
 

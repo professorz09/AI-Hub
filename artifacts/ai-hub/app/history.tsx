@@ -26,7 +26,7 @@ interface Conversation {
   createdAt: string;
 }
 
-const FILTER_CATEGORIES = ["All", "Chat", "Image", "Destiny", "Storyteller", "Homework", "Coding"];
+const FILTER_CATEGORIES = ["All", "Chat", "YouTube"];
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -156,16 +156,10 @@ export default function HistoryScreen() {
             onPress={() => setFilter(cat)}
           >
             {cat === "Chat" && (
-              <Ionicons name="chatbubble-outline" size={14} color={colors.mutedForeground} style={{ marginRight: 4 }} />
+              <Ionicons name="chatbubbles-outline" size={14} color={colors.mutedForeground} style={{ marginRight: 4 }} />
             )}
-            {cat === "Image" && (
-              <Ionicons name="image-outline" size={14} color={colors.mutedForeground} style={{ marginRight: 4 }} />
-            )}
-            {cat === "Destiny" && (
-              <Ionicons name="sparkles-outline" size={14} color={colors.mutedForeground} style={{ marginRight: 4 }} />
-            )}
-            {cat === "Storyteller" && (
-              <Ionicons name="pencil-outline" size={14} color={colors.mutedForeground} style={{ marginRight: 4 }} />
+            {cat === "YouTube" && (
+              <Ionicons name="logo-youtube" size={14} color="#FF0000" style={{ marginRight: 4 }} />
             )}
             <Text style={[styles.chipText, { color: colors.mutedForeground }]}>
               {cat}

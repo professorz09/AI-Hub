@@ -107,7 +107,11 @@ router.get("/openrouter/conversations/:id/messages", async (req, res) => {
 
 router.post("/openrouter/conversations/:id/messages", async (req, res) => {
   const id = parseInt(req.params["id"] ?? "0", 10);
-  const { content } = req.body as { content: string };
+  const { content, systemPrompt, model } = req.body as {
+    content: string;
+    systemPrompt?: string;
+    model?: string;
+  };
 
   if (!content) {
     res.status(400).json({ error: "content is required" });
@@ -146,13 +150,24 @@ router.post("/openrouter/conversations/:id/messages", async (req, res) => {
 
     let fullResponse = "";
 
-    const stream = await openrouter.chat.completions.create({
-      model: conv.model,
-      max_tokens: 8192,
-      messages: allMessages.map((m) => ({
+    const chatMessages: {
+      role: "system" | "user" | "assistant";
+      content: string;
+    }[] = [];
+    if (systemPrompt && systemPrompt.trim()) {
+      chatMessages.push({ role: "system", content: systemPrompt });
+    }
+    for (const m of allMessages) {
+      chatMessages.push({
         role: m.role as "user" | "assistant",
         content: m.content,
-      })),
+      });
+    }
+
+    const stream = await openrouter.chat.completions.create({
+      model: model && model.trim() ? model : conv.model,
+      max_tokens: 8192,
+      messages: chatMessages,
       stream: true,
     });
 

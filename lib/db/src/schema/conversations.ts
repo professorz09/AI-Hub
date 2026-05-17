@@ -5,7 +5,7 @@ import { z } from "zod/v4";
 export const conversations = pgTable("conversations", {
   id: serial("id").primaryKey(),
   title: text("title").notNull(),
-  model: text("model").notNull().default("anthropic/claude-opus-4.7-fast"),
+  model: text("model").notNull().default("anthropic/claude-3.5-sonnet"),
   category: text("category"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -6,6 +6,8 @@ import {
   TextInput,
   StyleSheet,
   Platform,
+  Modal,
+  Alert,
 } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -19,7 +21,11 @@ import {
   DEFAULT_MODEL,
   AIModel,
   QuickAction,
+  QUICK_ACTIONS,
 } from "@/constants/models";
+
+const YOUTUBE_URL_RE =
+  /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|shorts\/|live\/)|youtu\.be\/)[\w-]{6,}/i;
 
 export default function HomeScreen() {
   const colors = useColors();
@@ -27,21 +33,27 @@ export default function HomeScreen() {
   const [selectedModel, setSelectedModel] = useState<AIModel>(DEFAULT_MODEL);
   const [pickerVisible, setPickerVisible] = useState(false);
   const [inputText, setInputText] = useState("");
+  const [youtubeVisible, setYoutubeVisible] = useState(false);
+  const [youtubeUrl, setYoutubeUrl] = useState("");
 
   const topInset = Platform.OS === "web" ? 67 : insets.top;
   const bottomInset = Platform.OS === "web" ? 34 : insets.bottom;
 
-  async function handleSend(text: string, systemPrompt?: string) {
-    if (!text.trim()) return;
+  async function startConversation(args: {
+    title: string;
+    initialMessage: string;
+    systemPrompt: string;
+    category: string;
+  }) {
     try {
       const baseUrl = `https://${process.env.EXPO_PUBLIC_DOMAIN}`;
       const resp = await fetch(`${baseUrl}/api/openrouter/conversations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: text.slice(0, 60),
+          title: args.title.slice(0, 60),
           model: selectedModel.id,
-          category: systemPrompt ? "custom" : "chat",
+          category: args.category,
         }),
       });
       if (!resp.ok) throw new Error("Failed to create conversation");
@@ -51,19 +63,54 @@ export default function HomeScreen() {
         pathname: "/chat/[id]",
         params: {
           id: String(conv.id),
-          initialMessage: text,
+          initialMessage: args.initialMessage,
           modelId: selectedModel.id,
-          systemPrompt: systemPrompt ?? "",
+          systemPrompt: args.systemPrompt,
         },
       });
     } catch (e) {
       console.error(e);
+      Alert.alert("Error", "Couldn't start the conversation. Please try again.");
     }
+  }
+
+  function handleSend(text: string) {
+    if (!text.trim()) return;
+    startConversation({
+      title: text,
+      initialMessage: text,
+      systemPrompt: "",
+      category: "chat",
+    });
   }
 
   function handleQuickAction(action: QuickAction) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    handleSend(`Let's explore: ${action.name}`, action.systemPrompt);
+    if (action.id === "youtube") {
+      setYoutubeUrl("");
+      setYoutubeVisible(true);
+      return;
+    }
+    // "chat" action just focuses the user back on writing — no-op besides haptic.
+  }
+
+  function submitYoutube() {
+    const url = youtubeUrl.trim();
+    if (!YOUTUBE_URL_RE.test(url)) {
+      Alert.alert(
+        "Invalid link",
+        "Please paste a valid YouTube video URL (youtube.com/watch?v=... or youtu.be/...).",
+      );
+      return;
+    }
+    const youtube = QUICK_ACTIONS.find((a) => a.id === "youtube")!;
+    setYoutubeVisible(false);
+    startConversation({
+      title: "YouTube Summary",
+      initialMessage: `Please summarize this YouTube video:\n${url}`,
+      systemPrompt: youtube.systemPrompt,
+      category: "youtube",
+    });
   }
 
   return (
@@ -72,9 +119,9 @@ export default function HomeScreen() {
         <Pressable onPress={() => router.push("/history")} hitSlop={8}>
           <Ionicons name="menu" size={26} color={colors.foreground} />
         </Pressable>
-        <View style={{ flex: 1 }} />
-        <Pressable hitSlop={8}>
-          <Ionicons name="home-outline" size={24} color={colors.mutedForeground} />
+        <Text style={[styles.brand, { color: colors.foreground }]}>AI Hub</Text>
+        <Pressable hitSlop={8} onPress={() => router.push("/history")}>
+          <Ionicons name="time-outline" size={22} color={colors.mutedForeground} />
         </Pressable>
       </View>
 
@@ -87,7 +134,12 @@ export default function HomeScreen() {
           style={styles.avatarWrap}
         >
           <ModelAvatar model={selectedModel} size={88} />
-          <View style={[styles.chevron, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View
+            style={[
+              styles.chevron,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
             <Ionicons name="chevron-down" size={14} color={colors.mutedForeground} />
           </View>
         </Pressable>
@@ -105,9 +157,6 @@ export default function HomeScreen() {
         </Text>
 
         <View style={[styles.inputBar, { backgroundColor: colors.input }]}>
-          <Pressable hitSlop={8}>
-            <Ionicons name="add" size={22} color={colors.mutedForeground} />
-          </Pressable>
           <TextInput
             style={[styles.input, { color: colors.foreground }]}
             placeholder="Write your message..."
@@ -118,8 +167,18 @@ export default function HomeScreen() {
             onSubmitEditing={() => handleSend(inputText)}
             multiline={false}
           />
-          <Pressable hitSlop={8}>
-            <Ionicons name="mic-outline" size={22} color={colors.mutedForeground} />
+          <Pressable
+            hitSlop={8}
+            onPress={() => handleSend(inputText)}
+            disabled={!inputText.trim()}
+            style={[
+              styles.sendBtn,
+              {
+                backgroundColor: inputText.trim() ? colors.primary : colors.accent,
+              },
+            ]}
+          >
+            <Ionicons name="arrow-up" size={18} color={colors.primaryForeground} />
           </Pressable>
         </View>
       </View>
@@ -133,6 +192,89 @@ export default function HomeScreen() {
         onSelect={setSelectedModel}
         onClose={() => setPickerVisible(false)}
       />
+
+      <Modal
+        visible={youtubeVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setYoutubeVisible(false)}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setYoutubeVisible(false)}
+        />
+        <View
+          style={[
+            styles.ytSheet,
+            {
+              backgroundColor: colors.card,
+              paddingBottom: bottomInset + 20,
+            },
+          ]}
+        >
+          <View style={styles.ytHeader}>
+            <View
+              style={[styles.ytIcon, { backgroundColor: "#FF0000" + "22" }]}
+            >
+              <Ionicons name="logo-youtube" size={22} color="#FF0000" />
+            </View>
+            <Text style={[styles.ytTitle, { color: colors.foreground }]}>
+              Summarize a YouTube video
+            </Text>
+          </View>
+          <Text style={[styles.ytSub, { color: colors.mutedForeground }]}>
+            Paste a YouTube link and {selectedModel.name} will give you a
+            structured summary.
+          </Text>
+          <TextInput
+            style={[
+              styles.ytInput,
+              {
+                backgroundColor: colors.input,
+                color: colors.foreground,
+                borderColor: colors.border,
+              },
+            ]}
+            placeholder="https://youtube.com/watch?v=..."
+            placeholderTextColor={colors.mutedForeground}
+            value={youtubeUrl}
+            onChangeText={setYoutubeUrl}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            returnKeyType="go"
+            onSubmitEditing={submitYoutube}
+          />
+          <View style={styles.ytActions}>
+            <Pressable
+              style={[styles.ytBtn, { backgroundColor: colors.secondary }]}
+              onPress={() => setYoutubeVisible(false)}
+            >
+              <Text style={[styles.ytBtnText, { color: colors.foreground }]}>
+                Cancel
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[
+                styles.ytBtn,
+                {
+                  backgroundColor: youtubeUrl.trim()
+                    ? colors.primary
+                    : colors.accent,
+                },
+              ]}
+              onPress={submitYoutube}
+              disabled={!youtubeUrl.trim()}
+            >
+              <Text
+                style={[styles.ytBtnText, { color: colors.primaryForeground }]}
+              >
+                Summarize
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -146,6 +288,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 20,
     paddingBottom: 8,
+  },
+  brand: {
+    flex: 1,
+    textAlign: "center",
+    fontFamily: "Inter_700Bold",
+    fontSize: 17,
+    letterSpacing: 0.3,
   },
   center: {
     flex: 1,
@@ -191,12 +340,73 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderRadius: 28,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 8,
     gap: 10,
   },
   input: {
     flex: 1,
     fontFamily: "Inter_400Regular",
+    fontSize: 15,
+    paddingVertical: 6,
+  },
+  sendBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)" },
+  ytSheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    gap: 14,
+  },
+  ytHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  ytIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ytTitle: {
+    fontFamily: "Inter_700Bold",
+    fontSize: 17,
+  },
+  ytSub: {
+    fontFamily: "Inter_400Regular",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  ytInput: {
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontFamily: "Inter_400Regular",
+    fontSize: 14,
+  },
+  ytActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 4,
+  },
+  ytBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ytBtnText: {
+    fontFamily: "Inter_600SemiBold",
     fontSize: 15,
   },
 });
