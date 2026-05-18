@@ -16,6 +16,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import * as Haptics from "expo-haptics";
+import * as ImagePicker from "expo-image-picker";
+import { Image } from "expo-image";
 import { fetch } from "expo/fetch";
 import { useColors } from "@/hooks/useColors";
 import { ModelAvatar } from "@/components/ModelAvatar";
@@ -85,6 +87,16 @@ export default function ChatScreen() {
   // routing will be wired in when the backend gets a web-search tool.
   // ChatGPT uses the same pattern — a globe pill in the input row.
   const [webSearchOn, setWebSearchOn] = useState(false);
+  // Local attachment preview. expo-image-picker returns a local file
+  // URI; we surface it as a chip above the input so the user knows
+  // their pick registered. Wiring it through the edge function is a
+  // separate task (multimodal payload + Supabase storage) but the
+  // attach buttons no longer feel broken in the meantime.
+  const [pendingAttachment, setPendingAttachment] = useState<{
+    uri: string;
+    name: string;
+  } | null>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const inputRef = useRef<TextInput>(null);
   const hasSentInitial = useRef(false);
   // Ref-mirror of "is any stream in flight" used to guard against the
@@ -377,6 +389,8 @@ export default function ChatScreen() {
     activeAbortRef.current = abort;
 
     setInputText("");
+    setPendingAttachment(null);
+    setAttachError(null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     if (mode === "compare") {
@@ -586,6 +600,99 @@ export default function ChatScreen() {
     sendingRef.current = false;
   }
 
+  /** Open the device photo library and store the picked image's
+   *  local URI as a pending attachment. Wired only for visual feedback
+   *  right now — the picked image surfaces as a preview chip above
+   *  the input. Actual multimodal forwarding to the model lands when
+   *  the edge function gains an image-input path. */
+  async function pickFromLibrary() {
+    setAttachVisible(false);
+    setAttachError(null);
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        setAttachError("Photos permission denied. Enable it in Settings.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 0.8,
+      });
+      if (result.canceled) return;
+      const asset = result.assets[0];
+      if (!asset) return;
+      setPendingAttachment({
+        uri: asset.uri,
+        name: asset.fileName ?? "image",
+      });
+    } catch (e) {
+      console.error(e);
+      setAttachError("Couldn't open photos. Try again.");
+    }
+  }
+
+  async function pickFromCamera() {
+    setAttachVisible(false);
+    setAttachError(null);
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        setAttachError("Camera permission denied. Enable it in Settings.");
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+      if (result.canceled) return;
+      const asset = result.assets[0];
+      if (!asset) return;
+      setPendingAttachment({
+        uri: asset.uri,
+        name: asset.fileName ?? "photo",
+      });
+    } catch (e) {
+      console.error(e);
+      setAttachError("Couldn't open the camera. Try again.");
+    }
+  }
+
+  function pickFiles() {
+    // expo-document-picker isn't installed yet — surface a clear
+    // status instead of an unresponsive button.
+    setAttachVisible(false);
+    setAttachError("File attachments are coming soon.");
+  }
+
+  /** Spin up a fresh conversation row and replace the current chat
+   *  with it. Earlier the new-chat icon just navigated to `/`, which
+   *  is technically the empty-state home but felt like "going back"
+   *  to the user. This keeps them inside the chat surface — same
+   *  model, same blank transcript, no detour through home. */
+  async function startNewChat() {
+    if (anyStreaming) {
+      activeAbortRef.current?.abort();
+      activeAbortRef.current = null;
+    }
+    try {
+      const { data, error } = await supabase
+        .from("conversations")
+        .insert({
+          title: "New chat",
+          model: model.id,
+          category: "chat",
+          mode: "single",
+        })
+        .select("id")
+        .single();
+      if (error || !data) throw error ?? new Error("create failed");
+      router.replace({
+        pathname: "/chat/[id]",
+        params: { id: String(data.id), modelId: model.id },
+      });
+    } catch (e) {
+      console.error(e);
+      router.push("/");
+    }
+  }
+
   /** Find the user message that prompted this assistant turn and
    *  re-send it. Strips any post-target turns off the visible list
    *  too so the new stream replaces (visually) the failed reply.
@@ -713,7 +820,7 @@ export default function ChatScreen() {
         )}
 
         <Pressable
-          onPress={() => router.push("/")}
+          onPress={startNewChat}
           hitSlop={8}
           style={styles.headerIconBtn}
         >
@@ -802,6 +909,57 @@ export default function ChatScreen() {
             },
           ]}
         >
+          {pendingAttachment && (
+            <View
+              style={[
+                styles.attachChip,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+            >
+              <Image
+                source={{ uri: pendingAttachment.uri }}
+                style={styles.attachThumb}
+                contentFit="cover"
+              />
+              <Text
+                style={[
+                  styles.attachChipText,
+                  { color: colors.foreground },
+                ]}
+                numberOfLines={1}
+              >
+                {pendingAttachment.name}
+              </Text>
+              <Pressable
+                hitSlop={8}
+                onPress={() => setPendingAttachment(null)}
+              >
+                <Ionicons
+                  name="close-circle"
+                  size={20}
+                  color={colors.mutedForeground}
+                />
+              </Pressable>
+            </View>
+          )}
+          {attachError && (
+            <View style={styles.attachErrorRow}>
+              <Ionicons
+                name="alert-circle"
+                size={14}
+                color={colors.destructive ?? "#F87171"}
+              />
+              <Text
+                style={[
+                  styles.attachErrorText,
+                  { color: colors.destructive ?? "#F87171" },
+                ]}
+                onPress={() => setAttachError(null)}
+              >
+                {attachError}
+              </Text>
+            </View>
+          )}
           <View style={[styles.inputRow, { backgroundColor: colors.input }]}>
             <Pressable hitSlop={8} onPress={() => setAttachVisible(true)}>
               <Ionicons
@@ -914,15 +1072,17 @@ export default function ChatScreen() {
             { backgroundColor: colors.card, paddingBottom: bottomInset + 16 },
           ]}
         >
-          {[
-            { icon: "camera-outline", label: "Camera" },
-            { icon: "image-outline", label: "Photos" },
-            { icon: "add-circle-outline", label: "Files" },
-          ].map((item) => (
+          {(
+            [
+              { icon: "camera-outline", label: "Camera", action: pickFromCamera },
+              { icon: "image-outline", label: "Photos", action: pickFromLibrary },
+              { icon: "document-outline", label: "Files", action: pickFiles },
+            ] as const
+          ).map((item) => (
             <Pressable
               key={item.label}
               style={[styles.attachRow, { backgroundColor: colors.secondary }]}
-              onPress={() => setAttachVisible(false)}
+              onPress={item.action}
             >
               <Ionicons
                 name={item.icon as any}
@@ -972,6 +1132,38 @@ const styles = StyleSheet.create({
   searchToggleText: {
     fontFamily: "Inter_500Medium",
     fontSize: 12,
+  },
+  attachChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginBottom: 8,
+  },
+  attachThumb: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+  },
+  attachChipText: {
+    flex: 1,
+    fontFamily: "Inter_500Medium",
+    fontSize: 13,
+  },
+  attachErrorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  attachErrorText: {
+    fontFamily: "Inter_500Medium",
+    fontSize: 12,
+    flex: 1,
   },
   // Centered slot in the header — the pill itself sizes to its
   // content; this wrapper just claims the empty space between the

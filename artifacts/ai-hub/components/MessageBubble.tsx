@@ -97,7 +97,7 @@ function MessageBubbleImpl({
           style={[
             isUser ? styles.userBubble : styles.assistantBubble,
             isUser && {
-              backgroundColor: colors.primary,
+              backgroundColor: colors.secondary,
               borderBottomRightRadius: 4,
             },
           ]}
@@ -109,9 +109,7 @@ function MessageBubbleImpl({
               <Text
                 style={[
                   styles.text,
-                  {
-                    color: isUser ? colors.primaryForeground : colors.foreground,
-                  },
+                  { color: colors.foreground },
                 ]}
               >
                 {content}
