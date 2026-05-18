@@ -17,6 +17,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
 import { Image } from "expo-image";
 import { fetch } from "expo/fetch";
 import { useColors } from "@/hooks/useColors";
@@ -88,13 +90,18 @@ export default function ChatScreen() {
   // ChatGPT uses the same pattern — a globe pill in the input row.
   const [webSearchOn, setWebSearchOn] = useState(false);
   // Local attachment preview. expo-image-picker returns a local file
-  // URI; we surface it as a chip above the input so the user knows
-  // their pick registered. Wiring it through the edge function is a
-  // separate task (multimodal payload + Supabase storage) but the
-  // attach buttons no longer feel broken in the meantime.
+  // URI for the preview chip + base64 + mime so we can send the
+  // attachment inline to the model (no Supabase storage bucket — the
+  // user asked specifically for base64 so the same payload works
+  // across image and PDF without a separate signed-URL roundtrip).
+  // base64 is the raw payload without any "data:..." prefix; the
+  // edge function tacks on the data URL header at request time.
   const [pendingAttachment, setPendingAttachment] = useState<{
     uri: string;
     name: string;
+    mime: string;
+    base64: string;
+    kind: "image" | "file";
   } | null>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
   const inputRef = useRef<TextInput>(null);
@@ -278,6 +285,12 @@ export default function ChatScreen() {
     skipUserInsert: boolean;
     historyForModel: string | null;
     signal: AbortSignal;
+    attachment: {
+      name: string;
+      mime: string;
+      base64: string;
+      kind: "image" | "file";
+    } | null;
     onChunk: (delta: string) => void;
     onDone: () => void;
     onError: (msg: string) => void;
@@ -297,6 +310,7 @@ export default function ChatScreen() {
           model: args.modelId,
           skipUserInsert: args.skipUserInsert,
           historyForModel: args.historyForModel,
+          attachment: args.attachment,
         }),
         signal: args.signal,
       });
@@ -388,6 +402,20 @@ export default function ChatScreen() {
     const abort = new AbortController();
     activeAbortRef.current = abort;
 
+    // Snapshot the attachment before clearing the chip — the picker
+    // already wrote base64 onto state, but we need it stable through
+    // the async streamOne calls below. Clearing first prevents the
+    // chip from lingering after send and an accidental double-send
+    // re-attaching the same image.
+    const attachmentSnapshot = pendingAttachment
+      ? {
+          name: pendingAttachment.name,
+          mime: pendingAttachment.mime,
+          base64: pendingAttachment.base64,
+          kind: pendingAttachment.kind,
+        }
+      : null;
+
     setInputText("");
     setPendingAttachment(null);
     setAttachError(null);
@@ -449,6 +477,7 @@ export default function ChatScreen() {
             skipUserInsert: true,
             historyForModel: col.model.id,
             signal: abort.signal,
+            attachment: attachmentSnapshot,
             onChunk: (delta) => {
               pendingDeltasRef.current.set(
                 assistantId,
@@ -533,6 +562,7 @@ export default function ChatScreen() {
       skipUserInsert: false,
       historyForModel: null,
       signal: abort.signal,
+      attachment: attachmentSnapshot,
       onChunk: (delta) => {
         pendingDeltasRef.current.set(
           assistantId,
@@ -600,11 +630,39 @@ export default function ChatScreen() {
     sendingRef.current = false;
   }
 
-  /** Open the device photo library and store the picked image's
-   *  local URI as a pending attachment. Wired only for visual feedback
-   *  right now — the picked image surfaces as a preview chip above
-   *  the input. Actual multimodal forwarding to the model lands when
-   *  the edge function gains an image-input path. */
+  // Hard ceiling on base64 payload size. Past ~4 MB encoded the
+  // request body starts brushing Supabase Edge Function's 10 MB
+  // limit (base64 adds 33% overhead) and OpenRouter providers vary
+  // wildly in what they accept. Reject earlier with a clear message.
+  const ATTACHMENT_MAX_BYTES = 4 * 1024 * 1024;
+
+  /** Read a local file URI into base64. Uses expo-file-system because
+   *  expo-image-picker only sets `asset.base64` for images — PDFs
+   *  picked via DocumentPicker don't return it. Keeping a single
+   *  read path makes the pickers below uniform. */
+  async function readBase64(uri: string): Promise<string> {
+    return await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+  }
+
+  /** Map common file extensions to the mime types OpenRouter / the
+   *  underlying models actually validate. expo-image-picker doesn't
+   *  always populate `asset.mimeType`, and the DocumentPicker mime
+   *  on Android can be `application/octet-stream` for everything. */
+  function guessMime(name: string, fallback: string): string {
+    const ext = name.toLowerCase().split(".").pop() ?? "";
+    if (ext === "png") return "image/png";
+    if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+    if (ext === "webp") return "image/webp";
+    if (ext === "gif") return "image/gif";
+    if (ext === "pdf") return "application/pdf";
+    return fallback;
+  }
+
+  /** Open the device photo library, read the selected image as
+   *  base64, and stage it as a pending attachment that sendMessage
+   *  will inline into the next request. */
   async function pickFromLibrary() {
     setAttachVisible(false);
     setAttachError(null);
@@ -616,14 +674,27 @@ export default function ChatScreen() {
       }
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
-        quality: 0.8,
+        quality: 0.7,
+        base64: true,
       });
       if (result.canceled) return;
       const asset = result.assets[0];
       if (!asset) return;
+      const base64 = asset.base64 ?? (await readBase64(asset.uri));
+      // Rough byte length from base64: every 4 chars decode to 3
+      // bytes, minus padding. Saves an expensive Buffer roundtrip.
+      const approxBytes = Math.floor((base64.length * 3) / 4);
+      if (approxBytes > ATTACHMENT_MAX_BYTES) {
+        setAttachError("Image is too big. Pick one under 4 MB.");
+        return;
+      }
+      const name = asset.fileName ?? "image.jpg";
       setPendingAttachment({
         uri: asset.uri,
-        name: asset.fileName ?? "image",
+        name,
+        mime: asset.mimeType ?? guessMime(name, "image/jpeg"),
+        base64,
+        kind: "image",
       });
     } catch (e) {
       console.error(e);
@@ -640,13 +711,26 @@ export default function ChatScreen() {
         setAttachError("Camera permission denied. Enable it in Settings.");
         return;
       }
-      const result = await ImagePicker.launchCameraAsync({ quality: 0.8 });
+      const result = await ImagePicker.launchCameraAsync({
+        quality: 0.7,
+        base64: true,
+      });
       if (result.canceled) return;
       const asset = result.assets[0];
       if (!asset) return;
+      const base64 = asset.base64 ?? (await readBase64(asset.uri));
+      const approxBytes = Math.floor((base64.length * 3) / 4);
+      if (approxBytes > ATTACHMENT_MAX_BYTES) {
+        setAttachError("Photo is too big. Try a lower-resolution capture.");
+        return;
+      }
+      const name = asset.fileName ?? "photo.jpg";
       setPendingAttachment({
         uri: asset.uri,
-        name: asset.fileName ?? "photo",
+        name,
+        mime: asset.mimeType ?? guessMime(name, "image/jpeg"),
+        base64,
+        kind: "image",
       });
     } catch (e) {
       console.error(e);
@@ -654,11 +738,39 @@ export default function ChatScreen() {
     }
   }
 
-  function pickFiles() {
-    // expo-document-picker isn't installed yet — surface a clear
-    // status instead of an unresponsive button.
+  /** PDF / generic-file picker. Limited to PDFs because that's the
+   *  only document type the supported models actually parse as
+   *  content (images of text aside). */
+  async function pickFiles() {
     setAttachVisible(false);
-    setAttachError("File attachments are coming soon.");
+    setAttachError(null);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: "application/pdf",
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled) return;
+      const asset = result.assets[0];
+      if (!asset) return;
+      const base64 = await readBase64(asset.uri);
+      const approxBytes = Math.floor((base64.length * 3) / 4);
+      if (approxBytes > ATTACHMENT_MAX_BYTES) {
+        setAttachError("PDF is too big. Pick one under 4 MB.");
+        return;
+      }
+      const name = asset.name ?? "document.pdf";
+      setPendingAttachment({
+        uri: asset.uri,
+        name,
+        mime: asset.mimeType ?? guessMime(name, "application/pdf"),
+        base64,
+        kind: "file",
+      });
+    } catch (e) {
+      console.error(e);
+      setAttachError("Couldn't open the file picker. Try again.");
+    }
   }
 
   /** Spin up a fresh conversation row and replace the current chat
@@ -916,11 +1028,30 @@ export default function ChatScreen() {
                 { backgroundColor: colors.card, borderColor: colors.border },
               ]}
             >
-              <Image
-                source={{ uri: pendingAttachment.uri }}
-                style={styles.attachThumb}
-                contentFit="cover"
-              />
+              {pendingAttachment.kind === "image" ? (
+                <Image
+                  source={{ uri: pendingAttachment.uri }}
+                  style={styles.attachThumb}
+                  contentFit="cover"
+                />
+              ) : (
+                <View
+                  style={[
+                    styles.attachThumb,
+                    {
+                      backgroundColor: colors.primary + "26",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name="document-text"
+                    size={20}
+                    color={colors.primary}
+                  />
+                </View>
+              )}
               <Text
                 style={[
                   styles.attachChipText,

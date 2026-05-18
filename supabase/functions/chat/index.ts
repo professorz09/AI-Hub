@@ -36,15 +36,27 @@ const ALLOWED_MODELS = new Set<string>([
 ]);
 
 // How many of the most recent messages to feed back to the model as
-// context. 10 ≈ last 5 user/assistant turns — keeps recent intent
-// fresh while holding token cost roughly constant as a chat ages.
+// context. 20 = the last 10 user turns plus their 10 assistant
+// replies — what users intuitively mean by "remember my last 10
+// chats" (they count their own messages, not the pair). Earlier
+// 10-total meant the model only saw 5 of the user's own turns,
+// which felt forgetful after a few back-and-forths.
 // Tune via the env var CHAT_HISTORY_LIMIT if a deployment needs a
 // different ceiling.
-const HISTORY_LIMIT_DEFAULT = 10;
+const HISTORY_LIMIT_DEFAULT = 20;
 const HISTORY_LIMIT = Math.max(
   2,
   Math.min(100, Number(Deno.env.get("CHAT_HISTORY_LIMIT")) || HISTORY_LIMIT_DEFAULT),
 );
+
+interface AttachmentPayload {
+  name: string;
+  mime: string;
+  base64: string;
+  // image  → OpenRouter `image_url` content part (vision models only)
+  // file   → `file` content part with a data: URL (PDF for now)
+  kind: "image" | "file";
+}
 
 interface ReqBody {
   conversationId: number;
@@ -57,7 +69,24 @@ interface ReqBody {
   // Only fetch and feed history for this model's column when in compare mode.
   // null/undefined → include all user + assistant messages.
   historyForModel?: string | null;
+  // Optional inline attachment (base64, no bucket). Sent only with the
+  // CURRENT user turn — prior turns' attachments aren't replayed (they
+  // weren't persisted, and replaying them would blow context budget).
+  attachment?: AttachmentPayload | null;
 }
+
+// Hard ceiling on the base64 payload size at the edge. Mirrors the
+// client-side cap so a tampered client can't bypass it. 4 MB encoded
+// ≈ 3 MB binary — well under Supabase's 6-10 MB request limit even
+// once JSON overhead is added.
+const MAX_ATTACHMENT_B64_BYTES = 4 * 1024 * 1024;
+const ALLOWED_ATTACHMENT_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "application/pdf",
+]);
 
 function sse(obj: unknown): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(obj)}\n\n`);
@@ -92,9 +121,30 @@ Deno.serve(async (req) => {
     model,
     skipUserInsert,
     historyForModel,
+    attachment,
   } = body;
   if (!conversationId || !content?.trim()) {
     return jsonErr(400, "conversationId and content are required");
+  }
+
+  // Validate the attachment up-front so we can reject before incurring
+  // an OpenRouter call (and before we persist the user turn, so the
+  // chat doesn't end up with an orphan user message that the model
+  // never saw).
+  if (attachment) {
+    if (
+      !attachment.base64 ||
+      !attachment.mime ||
+      (attachment.kind !== "image" && attachment.kind !== "file")
+    ) {
+      return jsonErr(400, "Malformed attachment");
+    }
+    if (!ALLOWED_ATTACHMENT_MIMES.has(attachment.mime)) {
+      return jsonErr(400, "Unsupported attachment type");
+    }
+    if (attachment.base64.length > MAX_ATTACHMENT_B64_BYTES) {
+      return jsonErr(413, "Attachment too large");
+    }
   }
 
   // Reject runaway prompts before they reach the LLM. 32 KB of input
@@ -160,12 +210,36 @@ Deno.serve(async (req) => {
   }
   const history = recent.slice().reverse();
 
-  const messages: { role: "system" | "user" | "assistant"; content: string }[] =
-    [];
+  // OpenRouter accepts either a plain string content or an array of
+  // content parts ({type:"text"|"image_url"|"file"}). History turns
+  // stay as plain strings (no replay of historic attachments); only
+  // the current user turn switches to the array form when an
+  // attachment is present.
+  type ContentPart =
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+    | { type: "file"; file: { filename: string; file_data: string } };
+  type OutMessage =
+    | { role: "system" | "user" | "assistant"; content: string }
+    | { role: "user"; content: ContentPart[] };
+
+  const messages: OutMessage[] = [];
   if (systemPrompt && systemPrompt.trim()) {
     messages.push({ role: "system", content: systemPrompt });
   }
-  for (const m of history) {
+  // The current user turn is already in history (either we just
+  // inserted it above, or the client did in compare mode). Trim it
+  // so it doesn't get sent twice — the rebuilt "current turn" below
+  // is the canonical one (it carries the attachment when present).
+  let trimmedHistory = history;
+  if (
+    history.length > 0 &&
+    history[history.length - 1].role === "user" &&
+    history[history.length - 1].content === content
+  ) {
+    trimmedHistory = history.slice(0, -1);
+  }
+  for (const m of trimmedHistory) {
     // Defensive role clamp: drop anything that isn't a real chat turn.
     // Without this, a poisoned row (e.g. role="system" smuggled past the
     // CHECK constraint by direct SQL) would replay as a trusted turn.
@@ -185,6 +259,26 @@ Deno.serve(async (req) => {
       continue;
     }
     messages.push({ role, content: m.content });
+  }
+
+  // Current turn: plain string when no attachment, multimodal array
+  // when there is one. The data URL is built here (not on the client)
+  // so the prefix is always normalised — base64 only on the wire,
+  // never leaks into the persisted message row.
+  if (attachment) {
+    const dataUrl = `data:${attachment.mime};base64,${attachment.base64}`;
+    const parts: ContentPart[] = [{ type: "text", text: content }];
+    if (attachment.kind === "image") {
+      parts.push({ type: "image_url", image_url: { url: dataUrl } });
+    } else {
+      parts.push({
+        type: "file",
+        file: { filename: attachment.name, file_data: dataUrl },
+      });
+    }
+    messages.push({ role: "user", content: parts });
+  } else {
+    messages.push({ role: "user", content });
   }
 
   const openrouterResp = await fetch(
